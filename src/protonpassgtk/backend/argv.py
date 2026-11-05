@@ -117,6 +117,10 @@ def summarize_error(stderr: str, limit: int = 200) -> str:
 
     Takes the last "Error:" line (anyhow output) or the last non-empty line.
     """
+    if "NoStorageAccess" in stderr or "local key from keyring" in stderr:
+        # Kernel keyring unavailable (Flatpak seccomp, containers, qemu-user).
+        return ("pass-cli cannot access the kernel keyring. Set "
+                "PROTON_PASS_LINUX_KEYRING=dbus (uses gnome-keyring)")
     lines = [ln.strip() for ln in stderr.splitlines() if ln.strip()]
     if not lines:
         return "pass-cli failed"

@@ -175,7 +175,7 @@ class ItemView(Adw.Bin):
     def _url_row(self, url: str, label: str | None = None) -> Adw.ActionRow:
         f = Field("url", label or _("Website"), FieldKind.URL, url)
         row = self._base_row(f, url)
-        open_btn = icon_button("web-browser-symbolic", _("Open {url}").format(url=url))
+        open_btn = icon_button("adw-external-link-symbolic", _("Open {url}").format(url=url))
         open_btn.connect("clicked", lambda *_: self._win.open_url(url))
         row.add_suffix(open_btn)
         row.add_suffix(self._copy_text_button(url, _("Website")))

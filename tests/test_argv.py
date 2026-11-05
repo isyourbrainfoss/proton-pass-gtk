@@ -47,3 +47,12 @@ def test_child_env_quiet():
     env = A.child_env({"PATH": "/usr/bin"})
     assert env["PASS_LOG_LEVEL"] == "error"
     assert env["PATH"] == "/usr/bin"
+
+
+def test_keyring_error_hint():
+    stderr = ("Error: Error creating client features\n\nCaused by:\n"
+              "    1: Could not get local key from keyring\n"
+              "    2: Error accessing credential [name=cli-local-key:abc]: NoStorageAccess(Unknown(38))\n")
+    msg = A.summarize_error(stderr)
+    assert "PROTON_PASS_LINUX_KEYRING=dbus" in msg
+    assert "cli-local-key" not in msg

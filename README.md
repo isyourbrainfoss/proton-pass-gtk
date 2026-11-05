@@ -85,6 +85,23 @@ on Phosh, set this in the session environment (gnome-keyring is running):
 export PROTON_PASS_LINUX_KEYRING=dbus
 ```
 
+### aarch64 (Fairphone 5) testing without the phone
+
+The official `pass-cli-linux-aarch64` binary runs on an x86_64 box through
+qemu-user binfmt. You can also run the whole app inside an arm64 Debian
+trixie rootfs, made with `mmdebstrap --arch=arm64` and including
+`python3-gi gir1.2-adw-1 gir1.2-gtk-4.0 adwaita-icon-theme`. Point it at a
+host Xvfb with `GSK_RENDERER=cairo`; see
+`screenshots/arm64-qemu-phone-360x720-detail-dark.png`. Limits under
+qemu-user:
+
+- `keyctl` is not emulated (ENOSYS), so pass-cli's default kernel keyring
+  fails ("Error creating client features"). Set
+  `PROTON_PASS_KEY_PROVIDER=fs` for emulated tests only.
+- Packaging must pull in `librsvg2-common`, or some SVG icons do not render.
+- Touch, OSK (squeekboard), scale 3 and Wayland/Phoc need the real device or
+  a Phosh VM.
+
 ## Environment variables
 
 | Variable | Meaning |
