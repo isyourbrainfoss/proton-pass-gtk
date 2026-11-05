@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Proton Pass GTK
+GenericName=Password Manager
+Comment=Browse your Proton Pass vaults with Proton’s official pass-cli
+Exec=proton-pass-gtk
+Icon=io.github.isyourbrainfoss.ProtonPassGtk
+Terminal=false
+Type=Application
+Categories=GTK;GNOME;Utility;Security;
+Keywords=password;passwords;vault;proton;pass;totp;2fa;
+StartupNotify=true
+DBusActivatable=false
+X-Purism-FormFactor=Workstation;Mobile;
+X-GNOME-UsesNotifications=false

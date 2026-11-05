@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "id": "itm_01", "share_id": "shr_1111", "vault_id": "vlt_AAAA",
+      "state": "Active", "flags": [],
+      "create_time": "2026-01-15T12:00:00", "modify_time": "2026-10-02T09:30:00",
+      "title": "Example Mail", "item_type": "login"
+    },
+    {
+      "id": "itm_02", "share_id": "shr_1111", "vault_id": "vlt_AAAA",
+      "state": "Active", "flags": ["SkipHealthCheck"],
+      "create_time": "2026-01-15T12:00:00", "modify_time": "2026-10-03T09:30:00",
+      "folder_id": "fld_9", "title": "Demo Card", "item_type": "credit_card"
+    },
+    {
+      "id": "itm_03", "share_id": "shr_1111", "vault_id": "vlt_AAAA",
+      "state": "Trashed", "flags": [],
+      "create_time": "2026-01-15T12:00:00", "modify_time": "2026-10-04T09:30:00",
+      "title": "", "item_type": "ssh_key"
+    }
+  ],
+  "folders": [{"folder_id": "fld_9", "folder_name": "Cards", "parent_id": null}]
+}
