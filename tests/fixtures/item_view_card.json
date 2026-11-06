@@ -1,0 +1,17 @@
+{
+  "item": {
+    "id": "itm_02", "share_id": "shr_1111", "vault_id": "vlt_AAAA",
+    "content": {
+      "title": "Demo Card", "note": "", "item_uuid": "u2",
+      "content": {"CreditCard": {
+        "cardholder_name": "Demo User", "card_type": "Visa",
+        "number": "4111FAKE0000FAKE", "verification_number": "FAKE-cvv",
+        "expiration_date": "2030-12", "pin": "FAKE-pin"
+      }},
+      "extra_fields": [], "platform_specific": null, "custom_icon": null
+    },
+    "state": "Active", "flags": [],
+    "create_time": "2026-01-15T12:00:00", "modify_time": "2026-10-03T09:30:00"
+  },
+  "attachments": [{"id": "att_1"}]
+}

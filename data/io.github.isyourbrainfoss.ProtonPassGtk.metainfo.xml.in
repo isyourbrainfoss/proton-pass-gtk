@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<component type="desktop-application">
+  <id>io.github.isyourbrainfoss.ProtonPassGtk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Proton Pass GTK</name>
+  <summary>Browse your Proton Pass vaults</summary>
+  <developer id="io.github.isyourbrainfoss">
+    <name>Isyour Brainfoss</name>
+  </developer>
+  <description>
+    <p>
+      An unofficial, adaptive GTK front end for Proton’s official command-line
+      tool, pass-cli. It works on phones running Phosh and on the desktop.
+      Not affiliated with Proton AG.
+    </p>
+    <ul>
+      <li>Sign in in your browser through pass-cli (SSO, 2FA and security keys)</li>
+      <li>Browse vaults and search items</li>
+      <li>Copy usernames, passwords and one-time codes; the clipboard is cleared automatically</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.isyourbrainfoss.ProtonPassGtk.desktop</launchable>
+  <url type="homepage">https://github.com/isyourbrainfoss/proton-pass-gtk</url>
+  <url type="bugtracker">https://github.com/isyourbrainfoss/proton-pass-gtk/issues</url>
+  <url type="vcs-browser">https://github.com/isyourbrainfoss/proton-pass-gtk</url>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <branding>
+    <color type="primary" scheme_preference="light">#c9b8ff</color>
+    <color type="primary" scheme_preference="dark">#3d2a8a</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Vaults, items and details on the desktop</caption>
+      <image>https://raw.githubusercontent.com/isyourbrainfoss/proton-pass-gtk/main/screenshots/rust/desktop-1280x800-list-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Item details on a phone</caption>
+      <image>https://raw.githubusercontent.com/isyourbrainfoss/proton-pass-gtk/main/screenshots/rust/phone-360x720-detail-light.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.2.0" date="2026-11-06">
+      <description><p>Rust rewrite with adaptive navigation and offline Flatpak builds.</p></description>
+    </release>
+    <release version="0.1.0" date="2026-11-05">
+      <description>
+        <p>First scaffold: sign-in, vaults, search, item details and copy with clipboard auto-clear.</p>
+      </description>
+    </release>
+  </releases>
+</component>
