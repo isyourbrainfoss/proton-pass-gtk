@@ -1,6 +1,6 @@
 # Proton Pass GTK — Rust edition
 
-An **unofficial, read-only** adaptive GTK4/libadwaita frontend for Proton’s official
+An **unofficial** adaptive GTK4/libadwaita frontend for Proton’s official
 [pass-cli](https://github.com/protonpass/pass-cli). Not affiliated with Proton AG.
 App ID: `io.github.isyourbrainfoss.ProtonPassGtk`. GPL-3.0-or-later.
 
@@ -19,13 +19,41 @@ is deliberately untouched. No Proton session or real credentials are included.
 - Vault selection, active-item list, current-vault search and type-to-search.
 - Login, card, identity, secure note, alias, SSH key, Wi-Fi, custom/section fields.
   Unknown types retain their title/note; attachments are counted, not downloaded.
-- Copy username/password/one-time code with toasts; **30-second clipboard clear**
-  only if this app still owns the clipboard. Passwords hide again after 30 seconds.
-- Live 30-second TOTP countdown. A revealed code refreshes on period rollover and
-  hides after 30 seconds. Copy always fetches a fresh code. Nonstandard TOTP
-  periods are not yet decoded (the CLI code-only JSON has no period metadata).
-- Accessible button/search labels, wrapping details, keyboard navigation.
+- Copy username/password/one-time code with toasts; the clipboard is cleared after
+  **30 seconds** (configurable 10–90 s) only if this app still owns it. Revealed
+  values hide again after 30 seconds.
+- **TOTP periods per field:** the `period` of each `otpauth://` URI is read at the
+  parsing boundary (the seed is discarded), so 15/30/60-second (any 1–300 s) codes
+  get a correct countdown and refresh on their own rollover. Bare base32 seeds
+  and URIs without `period` use 30 s. Copy always fetches a fresh code.
+- **Pass extra password:** an Adwaita password dialog (opt-in switch on the sign-in
+  page and in Preferences, or shown automatically when the demo backend asks for
+  it). The value goes to pass-cli through an inherited close-on-exec **pipe** as
+  `PROTON_PASS_EXTRA_PASSWORD_FILE=/dev/fd/3` — never argv, never the environment,
+  never disk. Up to three attempts, like pass-cli itself.
+- **Lock and auto-lock:** Ctrl+L / lock button, and automatic lock after
+  inactivity (default 5 min; never/1/2/5/10/15/30 min). Locking closes dialogs,
+  clears this app's clipboard, revealed values, item details and lists, then shows
+  a lock screen; Unlock reloads from pass-cli. This is a privacy lock, not a PIN:
+  pass-cli's own server-enforced `session` lock is the real barrier (see below).
+- **Preferences** (Ctrl+,): clipboard timeout, auto-lock, extra-password prompt,
+  style (follow system/light/dark). Window size/maximized and the last vault are
+  restored on start. Stored as a 0600 `key=value` file in
+  `$XDG_CONFIG_HOME/proton-pass-gtk/settings.ini` (Flatpak:
+  `~/.var/app/io.github.isyourbrainfoss.ProtonPassGtk/config/…`). No secrets.
+- **Item editing (demo backend only):** new login (Ctrl+N), edit login (Ctrl+E) and
+  *Move to Trash* with a confirmation dialog. The real backend wiring exists but is
+  **disabled** unless `PPG_ENABLE_REAL_EDITS=1`: create sends a JSON template on
+  stdin (`item create login --from-template -`), trash is reversible
+  (`item trash`), and updates only pass non-secret fields because
+  `item update --field k=v` puts values in argv; password changes are refused.
+- **Attachments:** name/size/type list with a Save dialog. The demo writes a tiny
+  fake text file. The real path calls `item attachment download … --output PATH`
+  (read-only, untested against a real account).
+- Accessible button/search/list labels, wrapping details, keyboard navigation.
 - Explicit demo backend (`PPG_BACKEND=mock`) with a permanent **fake data** banner.
+  `PPG_MOCK_EXTRA_PASSWORD=1` makes demo sign-in require an extra password
+  (anything except `wrong` is accepted).
 
 ### Keyboard shortcuts
 
@@ -33,6 +61,9 @@ is deliberately untouched. No Proton session or real credentials are included.
 |---|---|
 | Ctrl+F / type text | Search current vault |
 | Ctrl+R | Refresh |
+| Ctrl+L | Lock |
+| Ctrl+N / Ctrl+E | New login / Edit login (demo backend) |
+| Ctrl+, | Preferences |
 | Ctrl+W / Ctrl+Q | Close / Quit |
 | Ctrl+? | Shortcuts |
 | Ctrl+Shift+U | Copy username (email fallback) |
@@ -71,9 +102,8 @@ PPG_PASS_CLI="$PWD/tools/pass-cli" cargo run --locked
 
 `build-aux/fetch-pass-cli.sh` fetches/verifies the official CLI for development.
 Never enter credentials in this app or put secrets in shell arguments. Sign-in
-is on Proton’s website. Accounts using a Pass extra password must currently run
-`pass-cli login` once in the matching environment first; extra-password UI and
-session-unlock UI are future work. CLI account eligibility depends on Proton;
+is on Proton’s website. For a Pass extra password, turn on “Ask for Pass extra
+password” before signing in. CLI account eligibility depends on Proton;
 third-party paid-plan reports are not an official guarantee.
 
 GNOME-style Meson entry point (all Cargo dependencies must be fetched first):
@@ -102,17 +132,25 @@ rustup target add aarch64-unknown-linux-gnu
 PKG_CONFIG_ALLOW_CROSS=1 cargo check --locked --target aarch64-unknown-linux-gnu
 # Deterministic GTK-rendered mock screenshots:
 cargo build --locked
-xvfb-run -a -s '-screen 0 1600x1000x24' dbus-run-session -- build-aux/screenshots.sh
+xvfb-run -a -s '-screen 0 1920x1200x24' dbus-run-session -- build-aux/screenshots.sh
 ```
 
 Fixtures and CLI notes are reused from `feat/scaffold`. Tests cover parsing,
 secret redaction, all item types, field arguments, URL allowlisting, a real async
-subprocess contract with an offline fake CLI, and the mock backend lifecycle. The separate GTK regression test verifies all
-three adaptive widths, search, copying, clipboard ownership preservation,
-30-second clipboard clear/password re-hide, and sign-out cleanup.
+subprocess contract with an offline fake CLI (which asserts that the extra
+password and template passwords never reach argv or the environment and reads the
+extra password from `/dev/fd/N`), gated real edit commands, mock create/edit/trash,
+TOTP period parsing/countdown, and preference parsing/clamping/0600 saving. The
+separate GTK regression test verifies all three adaptive widths, search, copying,
+clipboard ownership preservation, 30-second clipboard clear/password re-hide,
+attachment demo download, TOTP period labels, create/edit/trash reopening,
+persisted preferences, lock/unlock cleanup, auto-lock timing and sign-out cleanup.
 Screenshots are in [`screenshots/rust/`](screenshots/rust/): 360×720 phone vaults,
-list, details, search, sign-in and copied toast; 1280×800 desktop list/sign-in;
-all in light and dark. They render real GTK widgets, not drawn mockups.
+list, details, search, sign-in, copied toast, extra password, locked, edit, new
+login, trash confirmation, preferences, TOTP periods and attachments; 1280×800
+desktop list, sign-in, extra password, locked, edit, TOTP, preferences,
+attachments and trash; all in light and dark. They render real GTK widgets, not
+drawn mockups.
 
 ## Security boundaries and unfinished validation
 
@@ -132,8 +170,16 @@ all in light and dark. They render real GTK widgets, not drawn mockups.
 - Real account login, authenticated CLI JSON, portal/keyring behavior inside the
   final Flatpak, and native aarch64 linking/running still require validation.
   The ARM64 `cargo check` checks Rust code, not cross-library ABI/runtime behavior.
-- No edit/create/delete of vault items, extra-password entry, attachment download,
-  persisted settings, or idle/session auto-lock yet. This is a development build,
-  not a security-audited password manager replacement.
+- The extra password crosses a pipe into pass-cli; GTK's entry buffer is cleared
+  after reading, but like other typed text it transiently lives in GTK memory.
+- pass-cli's server-side session lock (`pass-cli session create-lock|unlock`)
+  reads its lock code only from an interactive TTY prompt (no env/file option in
+  2.7.0), so this app cannot unlock it. If you use one, unlock it in a terminal;
+  requests fail with a session-lock hint until then. The app's own lock is a
+  privacy screen that wipes in-app data; it is not a cryptographic barrier.
+- Editing a real account is disabled by default and untested. Editing secrets
+  through `item update` is deliberately not offered (argv exposure). TOTP and
+  custom fields are not editable here.
+- This is a development build, not a security-audited password manager replacement.
 
 [CLI commands, output formats and licensing](docs/PASS-CLI.md).

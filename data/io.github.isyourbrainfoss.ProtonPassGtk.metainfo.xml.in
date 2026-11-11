@@ -19,6 +19,8 @@
       <li>Sign in in your browser through pass-cli (SSO, 2FA and security keys)</li>
       <li>Browse vaults and search items</li>
       <li>Copy usernames, passwords and one-time codes; the clipboard is cleared automatically</li>
+      <li>One-time codes with 15-, 30- or 60-second periods</li>
+      <li>Pass extra password support, automatic lock after inactivity and saved preferences</li>
     </ul>
   </description>
   <launchable type="desktop-id">io.github.isyourbrainfoss.ProtonPassGtk.desktop</launchable>

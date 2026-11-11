@@ -1,4 +1,21 @@
-# Local verification — Rust rewrite
+# Local verification — mock features (`feat/mock-features`)
+
+Date: 2026-11-11 (Europe/Oslo / CET). Demo backend only; no Proton account,
+credentials or real secrets used.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings` | PASS |
+| `cargo test --locked` | PASS: 39 parsing/command/preference tests + 7 backend tests (fake CLI + mock) |
+| `cargo test --locked --no-default-features` | PASS: 39 tests without GTK |
+| Mock-only ignored GTK regression test under Xvfb | PASS (~35 s): previous checks plus attachment demo download, TOTP period labels, create/edit/trash, persisted preferences, lock/unlock wipe, auto-lock timing |
+| Meson build + `meson test` | PASS: desktop metadata + Cargo suite (appstreamcli not installed locally; CI unchanged) |
+| Screenshots (`build-aux/screenshots.sh`, Xvfb 1920x1200) | 46 images at exact sizes, light and dark, visually inspected |
+| Extra password via `/dev/fd/3` pipe | PASS against the fake CLI (asserts absence from argv and environment) |
+| Local Flatpak build | NOT RUN (SDK not installed here); CI builds both architectures |
+| Real login, extra password, attachment download, real edits | NOT TESTED (needs a real account) |
+
+# Local verification — Rust rewrite (PR #2)
 
 Date: 2026-11-06 (Europe/Oslo / CET). No real Proton account or credentials used.
 
