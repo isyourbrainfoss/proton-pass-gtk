@@ -1,0 +1,27 @@
+{
+  "item": {
+    "id": "itm_11",
+    "share_id": "shr_1111",
+    "vault_id": "vlt_AAAA",
+    "content": {
+      "title": "Demo SSH key",
+      "note": "Not a real key.",
+      "item_uuid": "itm_11-demo",
+      "content": {
+        "SshKey": {
+          "public_key": "ssh-ed25519 AAAAFAKEFAKEFAKEnotarealkey demo@example.invalid",
+          "private_key": "FAKE PRIVATE KEY \u00b7 not valid",
+          "sections": []
+        }
+      },
+      "extra_fields": [],
+      "platform_specific": null,
+      "custom_icon": null
+    },
+    "state": "Active",
+    "flags": [],
+    "create_time": "2026-03-01T10:00:00",
+    "modify_time": "2026-10-20T10:00:00"
+  },
+  "attachments": []
+}

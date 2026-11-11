@@ -1,0 +1,40 @@
+{
+  "item": {
+    "id": "itm_10",
+    "share_id": "shr_1111",
+    "vault_id": "vlt_AAAA",
+    "content": {
+      "title": "Demo identity",
+      "note": "Clearly fake identity for the demo.",
+      "item_uuid": "itm_10-demo",
+      "content": {
+        "Identity": {
+          "full_name": "Kari Demo Nordmann",
+          "email": "kari.demo@example.invalid",
+          "phone_number": "+47 000 00 000",
+          "birthdate": "1990-01-01",
+          "street_address": "Demoveien 1",
+          "zip_or_postal_code": "0000",
+          "city": "Demoby",
+          "country_or_region": "Norway",
+          "company": "Example AS",
+          "job_title": "Demo tester",
+          "passport_number": "FAKE-PASSPORT-000",
+          "extra_sections": [],
+          "extra_personal_details": [],
+          "extra_address_details": [],
+          "extra_contact_details": [],
+          "extra_work_details": []
+        }
+      },
+      "extra_fields": [],
+      "platform_specific": null,
+      "custom_icon": null
+    },
+    "state": "Active",
+    "flags": [],
+    "create_time": "2026-03-01T10:00:00",
+    "modify_time": "2026-10-20T10:00:00"
+  },
+  "attachments": []
+}

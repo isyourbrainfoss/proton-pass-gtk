@@ -1,0 +1,28 @@
+{
+  "item": {
+    "id": "itm_12",
+    "share_id": "shr_1111",
+    "vault_id": "vlt_AAAA",
+    "content": {
+      "title": "Demo Wi-Fi",
+      "note": "Guest network at the demo office.",
+      "item_uuid": "itm_12-demo",
+      "content": {
+        "Wifi": {
+          "ssid": "Demo-Guest",
+          "password": "FAKE-wifi-password",
+          "security": "WPA2",
+          "sections": []
+        }
+      },
+      "extra_fields": [],
+      "platform_specific": null,
+      "custom_icon": null
+    },
+    "state": "Active",
+    "flags": [],
+    "create_time": "2026-03-01T10:00:00",
+    "modify_time": "2026-10-20T10:00:00"
+  },
+  "attachments": []
+}

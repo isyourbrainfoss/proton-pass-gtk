@@ -12,17 +12,55 @@
           "email": "demo.user@example.com",
           "username": "demo_user",
           "password": "FAKE-test-password-123",
-          "urls": ["https://mail.example.com", ""],
+          "urls": [
+            "https://mail.example.com",
+            ""
+          ],
           "totp_uri": "otpauth://totp/Example:demo?secret=FAKEFAKEFAKEFAKE&issuer=Example",
-          "passkeys": [],
+          "passkeys": [
+            {
+              "key_id": "pk_demo",
+              "content": "FAKE-passkey-private-material",
+              "domain": "mail.example.com",
+              "rp_id": "example.com",
+              "rp_name": "Example Mail",
+              "user_name": "demo_user",
+              "user_display_name": "Demo User",
+              "user_id": "FAKE",
+              "create_time": 1767225600,
+              "note": "",
+              "credential_id": "FAKE",
+              "user_handle": "FAKE"
+            }
+          ],
           "autofill_urls": []
         }
       },
       "extra_fields": [
-        {"name": "Recovery key", "content": {"Hidden": "FAKE-hidden-value"}},
-        {"name": "Account ID", "content": {"Text": "12345"}},
-        {"name": "Admin 2FA", "content": {"Totp": "otpauth://totp/x?secret=FAKEFAKE"}},
-        {"name": "Renewal", "content": {"Timestamp": 1790000000}}
+        {
+          "name": "Recovery key",
+          "content": {
+            "Hidden": "FAKE-hidden-value"
+          }
+        },
+        {
+          "name": "Account ID",
+          "content": {
+            "Text": "12345"
+          }
+        },
+        {
+          "name": "Admin 2FA",
+          "content": {
+            "Totp": "otpauth://totp/x?secret=FAKEFAKE"
+          }
+        },
+        {
+          "name": "Renewal",
+          "content": {
+            "Timestamp": 1790000000
+          }
+        }
       ],
       "platform_specific": null,
       "custom_icon": null

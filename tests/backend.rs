@@ -221,3 +221,242 @@ fn mock_totp_codes_follow_their_period() {
         }
     });
 }
+#[test]
+fn parity_commands_against_fake_cli() {
+    use proton_pass_gtk::{generator::PassphraseOptions, model::ItemDraft};
+    run(async {
+        let mut b = fake_cli();
+        let vaults = b.vaults().await.unwrap();
+        // Read-only: trash listing works without real edits.
+        let trashed = b.trashed(&vaults[..1]).await.unwrap();
+        assert_eq!(trashed.len(), 1);
+        assert_eq!(trashed[0].id, "itm_03");
+        let card = ItemDraft {
+            kind: "creditcard".into(),
+            title: "Card".into(),
+            values: vec![("number".into(), Zeroizing::new("FAKE-card-number".into()))],
+            ..Default::default()
+        };
+        // Writes are refused until explicitly enabled.
+        assert_eq!(
+            b.create_item("shr_1111", &card).await,
+            Err(backend::ERR_EDITING_DISABLED)
+        );
+        assert_eq!(
+            b.untrash(&trashed[0]).await,
+            Err(backend::ERR_EDITING_DISABLED)
+        );
+        assert_eq!(
+            b.create_vault("Demo vault").await.map(|_| ()),
+            Err(backend::ERR_EDITING_DISABLED)
+        );
+        b.set_real_edits(true);
+        let created = b.create_item("shr_1111", &card).await.unwrap();
+        assert_eq!(created.id, "itm_new_card");
+        b.untrash(&trashed[0]).await.unwrap();
+        assert_eq!(
+            b.create_vault("Demo vault").await.unwrap().share_id,
+            "shr_new"
+        );
+        let alias = ItemDraft {
+            kind: "alias".into(),
+            extra: "shop".into(),
+            ..Default::default()
+        };
+        let a = b.create_item("shr_1111", &alias).await.unwrap();
+        assert_eq!(
+            (a.id.as_str(), a.title.as_str()),
+            ("itm_alias", "shop.fake@passinbox.invalid")
+        );
+        assert_eq!(
+            b.passphrase(&PassphraseOptions::default())
+                .await
+                .unwrap()
+                .as_str(),
+            "FAKE-Demo-Phrase"
+        );
+        // Hidden values are never sent through `item update`.
+        let mut new = card.clone();
+        new.values
+            .push(("pin".into(), Zeroizing::new("FAKE-pin".into())));
+        assert_eq!(
+            b.update_item(&created, &card, &new).await.map(|_| ()),
+            Err(backend::ERR_SECRET_ARGV)
+        );
+        // Only trashed items can be deleted permanently.
+        assert!(b.delete_forever(&created).await.is_err());
+        // Argument injection through names and emails is rejected.
+        assert!(b.create_vault("--force").await.is_err());
+        assert!(
+            b.share("shr_1111", None, "-x@example.com", "viewer")
+                .await
+                .is_err()
+        );
+    });
+}
+#[test]
+fn mock_parity_flows() {
+    use proton_pass_gtk::model::ItemDraft;
+    run(async {
+        let b = Backend::new(true, "unused");
+        let vaults = b.vaults().await.unwrap();
+        let share = vaults[0].share_id.clone();
+        let kinds: Vec<String> = b
+            .items(&share)
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.kind.clone())
+            .collect();
+        for k in [
+            "login",
+            "creditcard",
+            "note",
+            "custom",
+            "identity",
+            "sshkey",
+            "wifi",
+            "alias",
+        ] {
+            assert!(kinds.iter().any(|x| x == k), "{k} missing from demo data");
+        }
+        // Trash → restore → trash → delete forever.
+        let trashed = b.trashed(&vaults).await.unwrap();
+        assert_eq!(trashed.len(), 4);
+        b.untrash(&trashed[0]).await.unwrap();
+        assert_eq!(b.trashed(&vaults).await.unwrap().len(), 3);
+        let t = b.trashed(&vaults).await.unwrap().remove(0);
+        b.delete_forever(&t).await.unwrap();
+        assert_eq!(b.trashed(&vaults).await.unwrap().len(), 2);
+        // Every type can be created and edited in the demo.
+        let id = ItemDraft {
+            kind: "identity".into(),
+            title: "Demo person".into(),
+            values: vec![
+                ("full_name".into(), Zeroizing::new("Ola Demo".into())),
+                ("passport_number".into(), Zeroizing::new("FAKE-P".into())),
+            ],
+            ..Default::default()
+        };
+        let created = b.create_item(&share, &id).await.unwrap();
+        let d = b.detail(&created).await.unwrap();
+        assert!(
+            d.fields
+                .iter()
+                .any(|f| f.value.as_deref() == Some("Ola Demo"))
+        );
+        let pass = d
+            .fields
+            .iter()
+            .find(|f| f.key == "passport_number")
+            .unwrap()
+            .clone();
+        assert_eq!(pass.value, None);
+        assert_eq!(b.secret(&created, &pass).await.unwrap().as_str(), "FAKE-P");
+        let mut edited = proton_pass_gtk::model::item_draft_from(&d);
+        edited.values.retain(|(k, _)| k != "full_name");
+        edited.title = "Demo person 2".into();
+        let saved = b.update_item(&created, &id, &edited).await.unwrap();
+        let d2 = b.detail(&saved).await.unwrap();
+        assert!(
+            !d2.fields.iter().any(|f| f.key == "full_name"),
+            "cleared text field is removed"
+        );
+        assert!(
+            d2.fields.iter().any(|f| f.key == "passport_number"),
+            "untouched hidden value is kept"
+        );
+        let alias = b
+            .create_item(
+                &share,
+                &ItemDraft {
+                    kind: "alias".into(),
+                    extra: "shop".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(alias.title.starts_with("shop.") && alias.title.ends_with(".invalid"));
+        let ssh = b
+            .create_item(
+                &share,
+                &ItemDraft {
+                    kind: "sshkey".into(),
+                    title: "K".into(),
+                    extra: "ed25519".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            b.detail(&ssh)
+                .await
+                .unwrap()
+                .fields
+                .iter()
+                .any(|f| f.key == "private_key")
+        );
+        // Vaults: create, rename, move an item there, delete.
+        let v = b.create_vault("Demo travel").await.unwrap();
+        let v = b.rename_vault(&v, "Demo trips").await.unwrap();
+        assert!(
+            b.vaults()
+                .await
+                .unwrap()
+                .iter()
+                .any(|x| x.name == "Demo trips")
+        );
+        let moved = b.move_item(&ssh, &v).await.unwrap();
+        assert_eq!(b.items(&v.share_id).await.unwrap()[0].id, moved.id);
+        assert!(
+            !b.items(&share)
+                .await
+                .unwrap()
+                .iter()
+                .any(|i| i.id == ssh.id)
+        );
+        b.delete_vault(&v).await.unwrap();
+        assert!(
+            !b.vaults()
+                .await
+                .unwrap()
+                .iter()
+                .any(|x| x.share_id == v.share_id)
+        );
+        // Sharing and invitations.
+        b.share(&share, None, "friend@example.invalid", "editor")
+            .await
+            .unwrap();
+        assert!(
+            b.share(&share, None, "friend@example.invalid", "viewer")
+                .await
+                .is_err()
+        );
+        let members = b.members(&share, None).await.unwrap();
+        let friend = members
+            .iter()
+            .find(|m| m.email == "friend@example.invalid")
+            .unwrap()
+            .clone();
+        assert_eq!(friend.role, "Editor");
+        b.set_member_role(&share, &friend, "manager").await.unwrap();
+        assert!(
+            b.remove_member(&share, &members[0]).await.is_err(),
+            "owner stays"
+        );
+        b.remove_member(&share, &friend).await.unwrap();
+        assert_eq!(b.members(&share, None).await.unwrap().len(), 1);
+        let invites = b.invites().await.unwrap();
+        b.respond_invite(&invites[0], true).await.unwrap();
+        assert!(b.invites().await.unwrap().is_empty());
+        assert!(
+            b.vaults()
+                .await
+                .unwrap()
+                .iter()
+                .any(|x| x.name == "Demo family vault")
+        );
+    });
+}

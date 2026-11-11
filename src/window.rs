@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+mod parity;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use proton_pass_gtk::{
     backend::{self, Backend},
-    model::{self, Attachment, Detail, Field, Item, Kind, LoginDraft, Vault},
+    model::{self, Attachment, Detail, Field, Item, Kind, Vault},
     prefs::{self, ColorScheme, Prefs},
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
     time::Duration,
@@ -36,9 +38,9 @@ pub struct Window {
     sign_button: gtk::Button,
     cancel_button: gtk::Button,
     extra_switch: adw::SwitchRow,
-    new_button: gtk::Button,
+    new_button: gtk::MenuButton,
+    item_menu: gtk::MenuButton,
     edit_button: gtk::Button,
-    trash_button: gtk::Button,
     items: RefCell<Vec<Item>>,
     current: RefCell<Option<Detail>>,
     vault: RefCell<Option<Vault>>,
@@ -53,6 +55,14 @@ pub struct Window {
     locked: Cell<bool>,
     /// Dialogs that may show item data; force-closed on lock/sign-out.
     dialogs: RefCell<Vec<adw::Dialog>>,
+    vaults: RefCell<Vec<Vault>>,
+    /// `share/item` → (search text, row subtitle). Never contains hidden values.
+    index: RefCell<HashMap<String, (String, String)>>,
+    /// Session-only generator history; zeroized on lock, sign-out and exit.
+    gen_history: RefCell<Vec<Zeroizing<String>>>,
+}
+fn index_key(i: &Item) -> String {
+    format!("{}/{}", i.share_id, i.id)
 }
 fn boxed() -> gtk::Box {
     gtk::Box::new(gtk::Orientation::Vertical, 0)
@@ -151,10 +161,25 @@ impl Window {
         ib.append(&search);
         ib.append(&scroll(&item_list));
         let (items, items_header) = toolbar(&ib, "Items");
-        let new_button = icon_button("list-add-symbolic", "New login (Ctrl+N)");
-        new_button.set_action_name(Some("win.new-login"));
-        new_button.set_visible(backend.can_edit());
+        let new_button = gtk::MenuButton::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("New item (Ctrl+N: new login)")
+            .menu_model(&Self::new_item_menu())
+            .visible(backend.can_edit())
+            .build();
+        new_button.update_property(&[gtk::accessible::Property::Label("New item")]);
         items_header.pack_start(&new_button);
+        let vault_menu = gio::Menu::new();
+        vault_menu.append(Some("Share Vault…"), Some("win.vault-share"));
+        vault_menu.append(Some("Rename Vault…"), Some("win.vault-rename"));
+        vault_menu.append(Some("Delete Vault…"), Some("win.vault-delete"));
+        let vault_menu_button = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .menu_model(&vault_menu)
+            .tooltip_text("Vault menu")
+            .build();
+        vault_menu_button.update_property(&[gtk::accessible::Property::Label("Vault menu")]);
+        items_header.pack_end(&vault_menu_button);
         let detail_box = boxed();
         detail_box.set_margin_top(20);
         detail_box.set_margin_bottom(24);
@@ -272,8 +297,15 @@ impl Window {
         win.set_content(Some(&toast));
         let menu = gio::Menu::new();
         let section = gio::Menu::new();
+        section.append(Some("New Vault…"), Some("win.vault-new"));
+        section.append(Some("Password Generator"), Some("win.generator"));
+        section.append(Some("Trash"), Some("win.trash-view"));
+        section.append(Some("Invitations"), Some("win.invites"));
+        menu.append_section(None, &section);
+        let section = gio::Menu::new();
         section.append(Some("Refresh"), Some("win.refresh"));
         section.append(Some("Lock"), Some("win.lock"));
+        section.append(Some("Export…"), Some("win.export"));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
         section.append(Some("Preferences"), Some("win.preferences"));
@@ -295,9 +327,20 @@ impl Window {
         let edit_button = icon_button("document-edit-symbolic", "Edit (Ctrl+E)");
         edit_button.set_action_name(Some("win.edit"));
         detail_header.pack_end(&edit_button);
-        let trash_button = icon_button("user-trash-symbolic", "Move to trash");
-        trash_button.set_action_name(Some("win.trash"));
-        detail_header.pack_start(&trash_button);
+        let item_menu_model = gio::Menu::new();
+        item_menu_model.append(Some("Share Item…"), Some("win.share-item"));
+        item_menu_model.append(Some("Move to Another Vault…"), Some("win.move-item"));
+        let trash_section = gio::Menu::new();
+        trash_section.append(Some("Move to Trash…"), Some("win.trash"));
+        item_menu_model.append_section(None, &trash_section);
+        let item_menu = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .menu_model(&item_menu_model)
+            .tooltip_text("Item menu")
+            .visible(false)
+            .build();
+        item_menu.update_property(&[gtk::accessible::Property::Label("Item menu")]);
+        detail_header.pack_end(&item_menu);
         let s = Rc::new(Self {
             win,
             backend,
@@ -317,8 +360,8 @@ impl Window {
             cancel_button,
             extra_switch,
             new_button,
+            item_menu,
             edit_button,
-            trash_button,
             items: RefCell::new(vec![]),
             current: RefCell::new(None),
             vault: RefCell::new(None),
@@ -331,6 +374,9 @@ impl Window {
             last_activity: Cell::new(glib::monotonic_time()),
             locked: Cell::new(false),
             dialogs: RefCell::new(vec![]),
+            vaults: RefCell::new(vec![]),
+            index: RefCell::new(HashMap::new()),
+            gen_history: RefCell::new(vec![]),
         });
         s.actions(app);
         s.connections();
@@ -409,11 +455,18 @@ impl Window {
     fn update_item_actions(&self) {
         let current = self.current.borrow();
         let editable = self.backend.can_edit();
-        let login = current.as_ref().is_some_and(|d| d.item.kind == "login");
+        let login = current.is_some();
+        let has_vault = self.vault.borrow().is_some();
         for (name, enabled) in [
             ("edit", editable && login),
             ("trash", editable && current.is_some()),
-            ("new-login", editable && self.vault.borrow().is_some()),
+            ("new-login", editable && has_vault),
+            ("new-item", editable && has_vault),
+            ("share-item", current.is_some()),
+            ("move-item", editable && current.is_some()),
+            ("vault-share", has_vault),
+            ("vault-rename", editable && has_vault),
+            ("vault-delete", editable && has_vault),
         ] {
             if let Some(a) = self
                 .win
@@ -424,8 +477,9 @@ impl Window {
             }
         }
         self.edit_button.set_visible(editable && login);
-        self.trash_button.set_visible(editable && current.is_some());
         self.new_button.set_visible(editable);
+        self.new_button.set_sensitive(has_vault);
+        self.item_menu.set_visible(current.is_some());
     }
     /// Drop everything that could reveal vault contents.
     fn wipe(&self) {
@@ -434,6 +488,9 @@ impl Window {
         self.clear_clipboard();
         self.empty_detail();
         self.items.borrow_mut().clear();
+        self.index.borrow_mut().clear();
+        self.gen_history.borrow_mut().clear();
+        self.vaults.borrow_mut().clear();
         self.search.set_text("");
         Self::clear_list(&self.vault_list);
         Self::clear_list(&self.item_list);
@@ -520,6 +577,7 @@ impl Window {
     fn show_vaults(self: &Rc<Self>, vaults: Vec<Vault>) {
         self.stack.set_visible_child_name("vaults");
         Self::clear_list(&self.vault_list);
+        *self.vaults.borrow_mut() = vaults.clone();
         for v in &vaults {
             let r = row(&v.name, "Vault");
             r.add_prefix(&gtk::Image::from_icon_name("folder-symbolic"));
@@ -569,6 +627,7 @@ impl Window {
                 Ok(items) if s.epoch.get() == epoch => {
                     *s.items.borrow_mut() = items;
                     s.filter();
+                    s.build_index(epoch);
                     let reopen = reopen.and_then(|want| {
                         s.items
                             .borrow()
@@ -593,21 +652,24 @@ impl Window {
     }
     fn filter(self: &Rc<Self>) {
         Self::clear_list(&self.item_list);
-        let query = self.search.text().to_lowercase();
-        for i in self
-            .items
-            .borrow()
-            .iter()
-            .filter(|i| i.title.to_lowercase().contains(&query) || i.kind.contains(&query))
-        {
-            let r = row(&i.title, &i.kind);
+        let query = self.search.text().to_string();
+        let index = self.index.borrow();
+        let mut shown = 0;
+        for i in self.items.borrow().iter() {
+            let known = index.get(&index_key(i));
+            if !model::matches(i, known.map(|(t, _)| t.as_str()), &query) {
+                continue;
+            }
+            shown += 1;
+            let subtitle = known
+                .map(|(_, sub)| sub.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(model::kind_label(&i.kind));
+            let r = row(&i.title, subtitle);
             r.set_activatable(true);
-            r.add_prefix(&gtk::Image::from_icon_name(match i.kind.as_str() {
-                "login" => "dialog-password-symbolic",
-                "creditcard" => "document-properties-symbolic",
-                "note" => "document-edit-symbolic",
-                _ => "text-x-generic-symbolic",
-            }));
+            let icon = gtk::Image::from_icon_name(model::kind_icon(&i.kind));
+            icon.set_tooltip_text(Some(model::kind_label(&i.kind)));
+            r.add_prefix(&icon);
             self.item_list.append(&r);
             let s = Rc::downgrade(self);
             let i = i.clone();
@@ -617,8 +679,20 @@ impl Window {
                 }
             });
         }
-        if self.item_list.first_child().is_none() {
-            let empty = row("No items found", "Try a different search");
+        drop(index);
+        if shown == 0 {
+            let empty = if self.items.borrow().is_empty() && query.is_empty() {
+                row("This vault is empty", "Use + to add an item")
+            } else {
+                row(
+                    "No items found",
+                    if self.backend.mock || self.prefs.borrow().deep_search {
+                        "Searches titles, usernames, websites, notes and aliases"
+                    } else {
+                        "Searches titles. Turn on “Search item contents” in Preferences to search more."
+                    },
+                )
+            };
             empty.set_activatable(false);
             self.item_list.append(&empty);
         }
@@ -644,7 +718,8 @@ impl Window {
         title.set_wrap(true);
         title.set_xalign(0.0);
         self.detail_box.append(&title);
-        let label = gtk::Label::new(Some(&d.item.kind));
+        self.index_detail(&d);
+        let label = gtk::Label::new(Some(model::kind_label(&d.item.kind)));
         label.add_css_class("dim-label");
         label.set_xalign(0.0);
         self.detail_box.append(&label);
@@ -699,6 +774,28 @@ impl Window {
             g.add(&row("Alias email", &d.alias));
         }
         self.detail_box.append(&g);
+        if !d.passkeys.is_empty() {
+            let pk = adw::PreferencesGroup::builder()
+                .title("Passkeys")
+                .description("Stored passkeys are used by the official Proton Pass apps and browser extension. This app shows them but cannot sign in with them.")
+                .build();
+            for p in &d.passkeys {
+                let when = glib::DateTime::from_unix_local(p.create_time)
+                    .ok()
+                    .and_then(|t| t.format("%Y-%m-%d").ok())
+                    .map(|t| format!(" · created {t}"))
+                    .unwrap_or_default();
+                let place = if p.domain.is_empty() {
+                    p.rp_name.clone()
+                } else {
+                    p.domain.clone()
+                };
+                let r = row(&p.rp_name, &format!("{} · {place}{when}", p.user_name));
+                r.add_prefix(&gtk::Image::from_icon_name("channel-secure-symbolic"));
+                pk.add(&r);
+            }
+            self.detail_box.append(&pk);
+        }
         if !d.note.is_empty() {
             let note = adw::PreferencesGroup::new();
             note.set_title("Note");
@@ -791,30 +888,33 @@ impl Window {
             };
             match value {
                 Ok(value) if epoch == s.epoch.get() && request == s.request.get() => {
-                    let provider = gdk::ContentProvider::for_value(&value.as_str().to_value());
-                    let c = s.win.clipboard();
-                    if c.set_content(Some(&provider)).is_ok() {
-                        *s.clipboard.borrow_mut() = Some(provider.clone());
-                        let secs = s.prefs.borrow().clipboard_seconds;
-                        s.notify(&format!("Copied · clipboard clears in {secs} seconds"));
-                        let weak = Rc::downgrade(&s);
-                        glib::timeout_add_local_once(
-                            Duration::from_secs(u64::from(secs)),
-                            move || {
-                                if c.content().as_ref() == Some(&provider) {
-                                    let _ = c.set_content(gdk::ContentProvider::NONE);
-                                }
-                                if let Some(s) = weak.upgrade() {
-                                    if s.clipboard.borrow().as_ref() == Some(&provider) {
-                                        s.clipboard.borrow_mut().take();
-                                    }
-                                }
-                            },
-                        );
-                    }
+                    s.put_clipboard(&value);
                 }
                 Ok(_) => (),
                 Err(e) => s.notify(e),
+            }
+        });
+    }
+    /// Copy to the clipboard and clear it after the configured time, but
+    /// only if it still holds this app's value.
+    fn put_clipboard(self: &Rc<Self>, value: &str) {
+        let provider = gdk::ContentProvider::for_value(&value.to_value());
+        let c = self.win.clipboard();
+        if c.set_content(Some(&provider)).is_err() {
+            return self.notify("Could not copy");
+        }
+        *self.clipboard.borrow_mut() = Some(provider.clone());
+        let secs = self.prefs.borrow().clipboard_seconds;
+        self.notify(&format!("Copied · clipboard clears in {secs} seconds"));
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_secs(u64::from(secs)), move || {
+            if c.content().as_ref() == Some(&provider) {
+                let _ = c.set_content(gdk::ContentProvider::NONE);
+            }
+            if let Some(s) = weak.upgrade() {
+                if s.clipboard.borrow().as_ref() == Some(&provider) {
+                    s.clipboard.borrow_mut().take();
+                }
             }
         });
     }
@@ -1170,6 +1270,16 @@ impl Window {
             ("copy-password", vec!["<Control><Shift>c"]),
             ("copy-totp", vec!["<Control><Shift>t"]),
             ("logout", vec![]),
+            ("generator", vec!["<Control>g"]),
+            ("trash-view", vec![]),
+            ("vault-new", vec![]),
+            ("vault-rename", vec![]),
+            ("vault-delete", vec![]),
+            ("vault-share", vec![]),
+            ("share-item", vec![]),
+            ("move-item", vec![]),
+            ("invites", vec![]),
+            ("export", vec![]),
         ] {
             let a = gio::SimpleAction::new(name, None);
             let s = Rc::downgrade(self);
@@ -1187,10 +1297,30 @@ impl Window {
                         "new-login" => s.edit_dialog(None),
                         "edit" => {
                             let d = s.current.borrow().clone();
-                            if let Some(d) = d.filter(|d| d.item.kind == "login") {
+                            if let Some(d) = d {
                                 s.edit_dialog(Some(d));
                             }
                         }
+                        "generator" => s.generator_dialog(None),
+                        "trash-view" => s.trash_dialog(),
+                        "vault-new" => s.vault_name_dialog(None),
+                        "vault-rename" => {
+                            let v = s.vault.borrow().clone();
+                            if v.is_some() {
+                                s.vault_name_dialog(v);
+                            }
+                        }
+                        "vault-delete" => s.confirm_vault_delete(),
+                        "vault-share" => s.members_dialog(None),
+                        "share-item" => {
+                            let i = s.current.borrow().as_ref().map(|d| d.item.clone());
+                            if i.is_some() {
+                                s.members_dialog(i);
+                            }
+                        }
+                        "move-item" => s.move_dialog(),
+                        "invites" => s.invites_dialog(),
+                        "export" => s.export_flow(),
                         "trash" => s.confirm_trash(),
                         copy => {
                             let key = match copy {
@@ -1219,6 +1349,16 @@ impl Window {
             self.win.add_action(&a);
             app.set_accels_for_action(&format!("win.{name}"), &accels);
         }
+        let new_item = gio::SimpleAction::new("new-item", Some(glib::VariantTy::STRING));
+        let s = Rc::downgrade(self);
+        new_item.connect_activate(move |_, p| {
+            if let (Some(s), Some(kind)) = (s.upgrade(), p.and_then(|p| p.str())) {
+                if model::CREATABLE.contains(&kind) {
+                    s.item_editor(kind, None);
+                }
+            }
+        });
+        self.win.add_action(&new_item);
         self.update_item_actions();
     }
     fn preferences(self: &Rc<Self>) {
@@ -1290,8 +1430,79 @@ impl Window {
             )
             .build();
         look.add(&scheme);
+        let search = adw::PreferencesGroup::builder().title("Search").build();
+        let deep = adw::SwitchRow::builder()
+            .title("Search item contents")
+            .subtitle(if self.backend.mock {
+                "Usernames, websites, notes and aliases. Always on in the demo."
+            } else {
+                "Usernames, websites, notes and aliases. Loads each item’s details in the background, one at a time; hidden values are discarded."
+            })
+            .active(p.deep_search || self.backend.mock)
+            .sensitive(!self.backend.mock)
+            .build();
+        search.add(&deep);
+        let gen_group = adw::PreferencesGroup::builder()
+            .title("Password Generator")
+            .description("Defaults for new passwords. Generated values are never saved.")
+            .build();
+        let gen_mode = adw::ComboRow::builder()
+            .title("Type")
+            .model(&gtk::StringList::new(&["Random password", "Passphrase"]))
+            .selected(u32::from(p.gen_passphrase))
+            .build();
+        let gen_len = adw::SpinRow::with_range(
+            f64::from(proton_pass_gtk::generator::MIN_LENGTH),
+            f64::from(proton_pass_gtk::generator::MAX_LENGTH),
+            1.0,
+        );
+        gen_len.set_title("Password length");
+        gen_len.set_value(f64::from(p.gen_length));
+        let gen_words = adw::SpinRow::with_range(
+            f64::from(proton_pass_gtk::generator::MIN_WORDS),
+            f64::from(proton_pass_gtk::generator::MAX_WORDS),
+            1.0,
+        );
+        gen_words.set_title("Passphrase words");
+        gen_words.set_value(f64::from(p.gen_words));
+        gen_group.add(&gen_mode);
+        gen_group.add(&gen_len);
+        gen_group.add(&gen_words);
+        let s = Rc::downgrade(self);
+        deep.connect_active_notify(move |r| {
+            if let Some(s) = s.upgrade() {
+                let on = r.is_active();
+                s.update_prefs(|p| p.deep_search = on);
+                if on {
+                    s.build_index(s.epoch.get());
+                }
+            }
+        });
+        let s = Rc::downgrade(self);
+        gen_mode.connect_selected_notify(move |r| {
+            if let Some(s) = s.upgrade() {
+                let v = r.selected() == 1;
+                s.update_prefs(|p| p.gen_passphrase = v);
+            }
+        });
+        let s = Rc::downgrade(self);
+        gen_len.connect_value_notify(move |r| {
+            if let Some(s) = s.upgrade() {
+                let v = r.value() as u32;
+                s.update_prefs(|p| p.gen_length = v);
+            }
+        });
+        let s = Rc::downgrade(self);
+        gen_words.connect_value_notify(move |r| {
+            if let Some(s) = s.upgrade() {
+                let v = r.value() as u32;
+                s.update_prefs(|p| p.gen_words = v);
+            }
+        });
         page.add(&security);
         page.add(&signin);
+        page.add(&search);
+        page.add(&gen_group);
         page.add(&look);
         d.add(&page);
         let s = Rc::downgrade(self);
@@ -1330,160 +1541,9 @@ impl Window {
         self.track_dialog(&d);
         d.present(Some(&self.win));
     }
-    /// Create (`None`) or edit a login. Mock backend only unless explicitly
-    /// enabled; see `Backend::can_edit`.
+    /// Create a login (`None`) or edit any item.
     fn edit_dialog(self: &Rc<Self>, existing: Option<Detail>) {
-        if !self.backend.can_edit() {
-            return self.notify(backend::ERR_EDITING_DISABLED);
-        }
-        let Some(vault) = self.vault.borrow().clone() else {
-            return;
-        };
-        let old = existing.as_ref().map(model::draft_from).unwrap_or_default();
-        let creating = existing.is_none();
-        let title = entry_row("Title", &old.title);
-        let username = entry_row("Username", &old.username);
-        let email = entry_row("Email", &old.email);
-        let password = adw::PasswordEntryRow::builder()
-            .title(if creating {
-                "Password"
-            } else {
-                "New password (empty keeps current)"
-            })
-            .build();
-        // Real pass-cli updates pass values in argv; never offer it there.
-        password.set_visible(creating || self.backend.mock);
-        let url = entry_row("Website", &old.url);
-        url.set_input_purpose(gtk::InputPurpose::Url);
-        email.set_input_purpose(gtk::InputPurpose::Email);
-        let fields = adw::PreferencesGroup::new();
-        if self.backend.mock {
-            fields.set_description(Some(
-                "Demo backend: changes stay in memory and are discarded on exit. Do not enter real secrets.",
-            ));
-        }
-        for r in [&title, &username, &email] {
-            fields.add(r);
-        }
-        fields.add(&password);
-        fields.add(&url);
-        let note_group = adw::PreferencesGroup::builder().title("Note").build();
-        let note = gtk::TextView::builder()
-            .wrap_mode(gtk::WrapMode::WordChar)
-            .accepts_tab(false)
-            .top_margin(10)
-            .bottom_margin(10)
-            .left_margin(12)
-            .right_margin(12)
-            .height_request(96)
-            .build();
-        note.buffer().set_text(&old.note);
-        note.add_css_class("card");
-        note.update_property(&[gtk::accessible::Property::Label("Note")]);
-        note_group.add(&note);
-        let content = boxed();
-        content.set_spacing(18);
-        content.set_margin_top(12);
-        content.set_margin_bottom(24);
-        content.set_margin_start(12);
-        content.set_margin_end(12);
-        content.append(&fields);
-        content.append(&note_group);
-        let clamp = adw::Clamp::builder()
-            .maximum_size(520)
-            .child(&content)
-            .build();
-        let cancel = gtk::Button::with_label("Cancel");
-        let save = gtk::Button::with_label(if creating { "Create" } else { "Save" });
-        save.add_css_class("suggested-action");
-        let header = adw::HeaderBar::builder()
-            .show_start_title_buttons(false)
-            .show_end_title_buttons(false)
-            .build();
-        header.pack_start(&cancel);
-        header.pack_end(&save);
-        let view = adw::ToolbarView::new();
-        view.add_top_bar(&header);
-        view.set_content(Some(&scroll(&clamp)));
-        let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&view));
-        let d = adw::Dialog::builder()
-            .title(if creating { "New Login" } else { "Edit Login" })
-            .content_width(480)
-            .content_height(620)
-            .width_request(300)
-            .child(&toasts)
-            .build();
-        d.set_focus(Some(&title));
-        let check = {
-            let title = title.clone();
-            let save = save.clone();
-            move || save.set_sensitive(!title.text().trim().is_empty())
-        };
-        check();
-        title.connect_changed(move |_| check());
-        let weak = d.downgrade();
-        cancel.connect_clicked(move |_| {
-            if let Some(d) = weak.upgrade() {
-                d.close();
-            }
-        });
-        let s = Rc::downgrade(self);
-        let weak = d.downgrade();
-        let item = existing.map(|d| d.item);
-        save.connect_clicked(move |save| {
-            let (Some(s), Some(d)) = (s.upgrade(), weak.upgrade()) else {
-                return;
-            };
-            let buf = note.buffer();
-            let pw = Zeroizing::new(password.text().to_string());
-            let draft = LoginDraft {
-                title: title.text().into(),
-                username: username.text().into(),
-                email: email.text().into(),
-                password: (!pw.is_empty()).then_some(pw),
-                url: url.text().into(),
-                note: buf.text(&buf.start_iter(), &buf.end_iter(), false).into(),
-            };
-            if let Err(e) = draft.validate() {
-                toasts.add_toast(adw::Toast::new(e));
-                return;
-            }
-            save.set_sensitive(false);
-            let (old, item, vault, toasts, save, password) = (
-                old.clone(),
-                item.clone(),
-                vault.clone(),
-                toasts.clone(),
-                save.clone(),
-                password.clone(),
-            );
-            glib::spawn_future_local(async move {
-                let result = match &item {
-                    None => s.backend.create_login(&vault.share_id, &draft).await,
-                    Some(i) => s.backend.update_login(i, &old, &draft).await,
-                };
-                drop(draft);
-                match result {
-                    Ok(saved) => {
-                        password.set_text("");
-                        d.close();
-                        s.notify(if item.is_none() {
-                            "Login created"
-                        } else {
-                            "Changes saved"
-                        });
-                        s.load_items(vault, false, Some(saved));
-                    }
-                    Err(e) => {
-                        save.set_sensitive(true);
-                        toasts.add_toast(adw::Toast::new(e));
-                    }
-                }
-            });
-        });
-        self.track_dialog(&d);
-        d.present(Some(&self.win));
+        self.item_editor("login", existing);
     }
     fn confirm_trash(self: &Rc<Self>) {
         let Some(detail) = self.current.borrow().clone() else {
@@ -1549,7 +1609,7 @@ impl Window {
         let d = adw::AlertDialog::builder()
             .heading("Keyboard Shortcuts")
             .body(format!(
-                "Ctrl+F   Search\nCtrl+R   Refresh\nCtrl+L   Lock\nCtrl+N   New login\nCtrl+E   Edit login\nCtrl+,   Preferences\nCtrl+W / Ctrl+Q   Close / Quit\nCtrl+?   Keyboard shortcuts\nCtrl+Shift+U   Copy username\nCtrl+Shift+C   Copy password\nCtrl+Shift+T   Copy one-time code\n\nType to search in the current vault.\nRevealed values hide after {REVEAL_SECONDS} seconds; the clipboard clears after {secs} seconds.\nAuto-lock: {lock}."
+                "Ctrl+F   Search\nCtrl+R   Refresh\nCtrl+L   Lock\nCtrl+N   New login\nCtrl+E   Edit item\nCtrl+G   Password generator\nCtrl+,   Preferences\nCtrl+W / Ctrl+Q   Close / Quit\nCtrl+?   Keyboard shortcuts\nCtrl+Shift+U   Copy username\nCtrl+Shift+C   Copy password\nCtrl+Shift+T   Copy one-time code\n\nType to search in the current vault.\nRevealed values hide after {REVEAL_SECONDS} seconds; the clipboard clears after {secs} seconds.\nAuto-lock: {lock}."
             ))
             .build();
         d.add_response("close", "Close");
@@ -1580,20 +1640,39 @@ impl Window {
                         s.focus_search();
                         s.search.set_text("example");
                     }
-                    let want_totp = state == "totp";
+                    if state == "search-username" {
+                        s.focus_search();
+                        s.search.set_text("demo_user");
+                    }
+                    let target = match state.as_str() {
+                        "totp" => "Demo TOTP periods",
+                        "detail-identity" | "edit-identity" => "Demo identity",
+                        "detail-sshkey" => "Demo SSH key",
+                        "detail-wifi" => "Demo Wi-Fi",
+                        "detail-alias" => "Newsletter alias",
+                        "detail-card" => "Demo Card",
+                        _ => "Example Mail",
+                    };
                     let open = matches!(
                         state.as_str(),
-                        "detail" | "copied-toast" | "edit" | "trash" | "attachments" | "totp"
-                    ) || (w > 860 && state != "search");
+                        "detail"
+                            | "copied-toast"
+                            | "edit"
+                            | "trash"
+                            | "attachments"
+                            | "totp"
+                            | "passkeys"
+                            | "share-item"
+                            | "move"
+                            | "detail-identity"
+                            | "edit-identity"
+                            | "detail-sshkey"
+                            | "detail-wifi"
+                            | "detail-alias"
+                            | "detail-card"
+                    ) || (w > 860 && !state.starts_with("search"));
                     if open {
-                        let i = s.find_item(|i| {
-                            if want_totp {
-                                i.title == "Demo TOTP periods"
-                            } else {
-                                i.title == "Example Mail"
-                            }
-                        });
-                        if let Some(i) = i {
+                        if let Some(i) = s.find_item(|i| i.title == target) {
                             s.open(i);
                         }
                     }
@@ -1621,11 +1700,29 @@ impl Window {
                         }
                         dialog.present(Some(&ss.win));
                     }
-                    "edit" => ss.edit_dialog(d),
+                    "edit" | "edit-identity" => ss.edit_dialog(d),
                     "new" => ss.edit_dialog(None),
+                    "new-identity" => ss.item_editor("identity", None),
+                    "new-card" => ss.item_editor("creditcard", None),
+                    "new-alias" => ss.item_editor("alias", None),
+                    "new-wifi" => ss.item_editor("wifi", None),
+                    "new-sshkey" => ss.item_editor("sshkey", None),
+                    "generator" => ss.generator_dialog(None),
+                    "generator-passphrase" => {
+                        ss.update_prefs(|p| p.gen_passphrase = true);
+                        ss.generator_dialog(None);
+                    }
+                    "trash-view" => ss.trash_dialog(),
+                    "vault-new" => ss.vault_name_dialog(None),
+                    "vault-delete" => ss.confirm_vault_delete(),
+                    "vault-share" => ss.members_dialog(None),
+                    "share-item" => ss.members_dialog(d.map(|d| d.item)),
+                    "move" => ss.move_dialog(),
+                    "invites" => ss.invites_dialog(),
+                    "export" => ss.export_flow(),
                     "trash" => ss.confirm_trash(),
                     "preferences" => ss.preferences(),
-                    "attachments" => {
+                    "attachments" | "passkeys" => {
                         let adj = ss.detail_scroll.vadjustment();
                         adj.set_value(adj.upper());
                     }
@@ -1645,7 +1742,7 @@ impl Window {
                 }
                 let sss = ss.clone();
                 glib::timeout_add_local_once(Duration::from_millis(400), move || {
-                    if state == "attachments" {
+                    if state == "attachments" || state == "passkeys" {
                         let adj = sss.detail_scroll.vadjustment();
                         adj.set_value(adj.upper());
                     }
@@ -1709,6 +1806,7 @@ fn find_row(w: &gtk::Widget, title: &str) -> Option<adw::ActionRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proton_pass_gtk::model::LoginDraft;
     async fn wait(ms: u64) {
         glib::timeout_future(Duration::from_millis(ms)).await;
     }
@@ -1741,7 +1839,7 @@ mod tests {
             s.win.set_default_size(360, 720);
             wait(250).await;
             s.focus_search();
-            s.search.set_text("example");
+            s.search.set_text("example mail");
             s.filter();
             assert!(s.item_list.row_at_index(0).is_some());
             assert!(s.item_list.row_at_index(1).is_none());
@@ -1827,7 +1925,7 @@ mod tests {
             wait(200).await;
             let cur = s.current.borrow().clone().unwrap();
             assert_eq!(cur.item.title, "Demo created login");
-            assert!(s.edit_button.is_visible() && s.trash_button.is_visible());
+            assert!(s.edit_button.is_visible() && s.item_menu.is_visible());
             let mut renamed = model::draft_from(&cur);
             renamed.title = "Demo renamed login".into();
             let saved = s
@@ -1885,6 +1983,69 @@ mod tests {
             wait(300).await;
             s.update_prefs(|p| p.auto_lock_minutes = 0);
             assert!(!s.check_auto_lock(i64::MAX / 2));
+
+            // Feature parity: search by username/alias via the in-memory index.
+            wait(300).await;
+            s.search.set_text("demo_user");
+            s.filter();
+            assert!(s.find_item(|i| i.title == "Example Mail").is_some());
+            assert!(s.item_list.row_at_index(0).is_some());
+            let first = s
+                .item_list
+                .row_at_index(0)
+                .and_downcast::<adw::ActionRow>()
+                .unwrap();
+            assert_eq!(first.title(), "Example Mail");
+            s.search.set_text("passinbox");
+            s.filter();
+            let first = s
+                .item_list
+                .row_at_index(0)
+                .and_downcast::<adw::ActionRow>()
+                .unwrap();
+            assert_eq!(first.title(), "Newsletter alias");
+            assert!(
+                !s.index
+                    .borrow()
+                    .values()
+                    .any(|(t, _)| t.contains("fake-test-password"))
+            );
+            s.search.set_text("");
+            // Generator: produces a value, copies it, keeps session-only history.
+            s.generator_dialog(None);
+            wait(200).await;
+            assert!(!s.dialogs.borrow().is_empty());
+            s.gen_history
+                .borrow_mut()
+                .push(Zeroizing::new("FAKE-generated".into()));
+            // Every item type opens with a detail view.
+            for title in [
+                "Demo identity",
+                "Demo SSH key",
+                "Demo Wi-Fi",
+                "Newsletter alias",
+                "Demo Card",
+                "Recipe",
+                "Router",
+            ] {
+                let i = s.find_item(|i| i.title == title).unwrap();
+                s.open(i);
+                wait(100).await;
+                assert_eq!(s.current.borrow().as_ref().unwrap().item.title, title);
+                assert!(s.item_menu.is_visible());
+            }
+            // Trash view and vault dialogs open without errors.
+            s.trash_dialog();
+            s.members_dialog(None);
+            s.invites_dialog();
+            wait(200).await;
+            // Lock wipes the index and generator history.
+            s.lock();
+            assert!(s.index.borrow().is_empty());
+            assert!(s.gen_history.borrow().is_empty());
+            assert!(s.dialogs.borrow().is_empty());
+            s.unlock();
+            wait(300).await;
 
             s.backend.logout().await.unwrap();
             s.signed_out();
