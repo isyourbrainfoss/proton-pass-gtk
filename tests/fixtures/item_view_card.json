@@ -13,5 +13,5 @@
     "state": "Active", "flags": [],
     "create_time": "2026-01-15T12:00:00", "modify_time": "2026-10-03T09:30:00"
   },
-  "attachments": [{"id": "att_1"}]
+  "attachments": [{"id": "att_1", "size": 49152, "content": {"name": "demo-receipt.pdf", "mime_type": "application/pdf"}}]
 }
