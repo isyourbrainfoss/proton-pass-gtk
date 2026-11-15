@@ -25,8 +25,12 @@ Source: `pass-cli --help` (2.7.0, ba80a19), the official docs at
   this was verified with stdin=/dev/null and stdout piped. Rust's stdout is
   line-buffered, so the URL arrives at once.
 * Pass "extra password": if the account has one, the CLI reads it from
-  `PROTON_PASS_EXTRA_PASSWORD`, from `PROTON_PASS_EXTRA_PASSWORD_FILE`, or
-  from an interactive prompt (3 attempts). The GUI does not support this yet.
+  `PROTON_PASS_EXTRA_PASSWORD`, from `PROTON_PASS_EXTRA_PASSWORD_FILE` (opened
+  and read to EOF, then trimmed; `pass-cli/src/client.rs::get_value`), or from an
+  interactive `rpassword` prompt on the TTY. The GUI uses the file variant with
+  an inherited pipe: `PROTON_PASS_EXTRA_PASSWORD_FILE=/dev/fd/3`. It never sets
+  `PROTON_PASS_EXTRA_PASSWORD` (environment is readable by same-user processes)
+  and unsets both variables for every child.
 * Personal access token: `pass-cli login --pat pst_…::KEY`. The help says
   `--pat`; the docs say `--personal-access-token`. You can also set the
   `PROTON_PASS_PERSONAL_ACCESS_TOKEN` env var. A PAT session lasts 2 h.
@@ -50,7 +54,11 @@ Source: `pass-cli --help` (2.7.0, ba80a19), the official docs at
   `PROTON_PASS_LINUX_KEYRING=dbus` uses the Secret Service (gnome-keyring)
   instead and persists. Recommended on Phosh, and required in Flatpak
   because flatpak's seccomp filter blocks keyctl.
-* Session lock: `pass-cli session create-lock|lock|unlock|remove-lock`.
+* Session lock: `pass-cli session create-lock [--idle-timeout 30..900]|lock|unlock|remove-lock`.
+  The lock code is read only via `rpassword` TTY prompts ("Enter lock code: ",
+  `pass-cli/src/commands/session/unlock.rs`); there is no env/file input, so a
+  GUI without a pseudo-terminal cannot unlock it. `info` reports
+  `session_has_lock` / `session_lock_after_seconds`.
 * Logs go to stderr. Set `PASS_LOG_LEVEL=trace|debug|info|warn|error|off`.
 
 ## Commands used by the app
@@ -64,6 +72,15 @@ Source: `pass-cli --help` (2.7.0, ba80a19), the official docs at
 | One field value | `item view --share-id S --item-id I --field password` | raw value + `\n` on stdout |
 | TOTP | `item totp --share-id S --item-id I [--field F] --output json` | `{"<field>": "123456", …}` (login TOTP field is `totp`) |
 | Generate TOTP from URI | `totp generate` | |
+
+### Write commands (wired, disabled for real accounts unless `PPG_ENABLE_REAL_EDITS=1`)
+
+| Purpose | Command | Notes |
+|---|---|---|
+| Create login | `item create login --share-id S --from-template -` | JSON template on **stdin**: `{title, username, email, password, totp_uri, urls, note, extra_fields:[{kind,title,value}]}`. Output format is undocumented; the app reloads the list. |
+| Update fields | `item update --share-id S --item-id I --field k=v …` | Values are **argv**. The app only sends non-secret fields (`title`, `username`, `email`, `url`, `note`) and refuses password changes. TOTP/time fields cannot be updated by the CLI. |
+| Trash (reversible) | `item trash --share-id S --item-id I` | `item delete` is permanent and is not used. |
+| Attachment download | `item attachment download --share-id S --item-id I --attachment-id A --output PATH` | Read-only. Attachment metadata in `item view` JSON is `attachments:[{id, size, content:{name, mime_type}}]` (from `view.rs`; exact JSON not yet seen from a real account). |
 
 Other commands: `item create/update/delete/trash/untrash/move/share`,
 `item attachment`, `item alias`, `password generate|score`, `vault

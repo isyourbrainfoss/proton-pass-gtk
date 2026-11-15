@@ -30,7 +30,7 @@ pub struct Vault {
     pub name: String,
     pub share_id: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Item {
     pub id: String,
     pub share_id: String,
@@ -51,6 +51,17 @@ pub struct Field {
     pub kind: Kind,
     pub value: Option<String>,
     pub section: String,
+    /// TOTP step in seconds (only meaningful for `Kind::Totp`). Parsed from the
+    /// otpauth URI at the boundary; the URI and its seed are never retained.
+    pub period: u32,
+}
+/// Attachment metadata only; contents are never loaded into memory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub size: u64,
+    pub mime_type: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Detail {
@@ -59,7 +70,7 @@ pub struct Detail {
     pub note: String,
     pub urls: Vec<String>,
     pub alias: String,
-    pub attachments: usize,
+    pub attachments: Vec<Attachment>,
 }
 fn json(s: &str) -> Result<Json> {
     serde_json::from_str(s)
@@ -151,9 +162,49 @@ fn add(fields: &mut Vec<Field>, payload: &Value, key: &str, cli_key: &str, kind:
         } else {
             None
         },
+        period: period_of(&kind, &payload[key]),
         kind,
         section: String::new(),
     });
+}
+fn period_of(kind: &Kind, v: &Value) -> u32 {
+    if *kind == Kind::Totp {
+        totp_period(v.as_str().unwrap_or_default())
+    } else {
+        0
+    }
+}
+/// Standard TOTP step used when a URI has no (valid) `period` parameter.
+pub const DEFAULT_TOTP_PERIOD: u32 = 30;
+/// Extract only the `period` parameter of an `otpauth://totp/` URI.
+/// Bare base32 seeds and malformed values fall back to 30 seconds. Values
+/// outside 1–300 s are rejected as implausible. The seed is not copied.
+pub fn totp_period(uri: &str) -> u32 {
+    let Some(rest) = uri
+        .get(..15)
+        .filter(|p| p.eq_ignore_ascii_case("otpauth://totp/"))
+        .map(|_| &uri[15..])
+    else {
+        return DEFAULT_TOTP_PERIOD;
+    };
+    let query = rest.split_once('?').map_or("", |(_, q)| q);
+    let query = query.split('#').next().unwrap_or_default();
+    query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| k.eq_ignore_ascii_case("period"))
+        .and_then(|(_, v)| v.trim().parse::<u32>().ok())
+        .filter(|p| (1..=300).contains(p))
+        .unwrap_or(DEFAULT_TOTP_PERIOD)
+}
+/// Seconds until the code for `period` rolls over at Unix time `now`.
+pub fn totp_remaining(now: i64, period: u32) -> u32 {
+    let p = i64::from(period.max(1));
+    (p - now.rem_euclid(p)) as u32
+}
+/// Index of the TOTP time step containing Unix time `now`.
+pub fn totp_step(now: i64, period: u32) -> i64 {
+    now.div_euclid(i64::from(period.max(1)))
 }
 fn extras(fields: &mut Vec<Field>, a: &Value, section: &str, prefix: &str) {
     if let Some(a) = a.as_array() {
@@ -180,6 +231,7 @@ fn extras(fields: &mut Vec<Field>, a: &Value, section: &str, prefix: &str) {
                     } else {
                         None
                     },
+                    period: period_of(&kind, v),
                     kind,
                     section: section.into(),
                 });
@@ -295,8 +347,130 @@ pub fn detail(s: &str) -> Result<Detail> {
             })
             .unwrap_or_default(),
         alias: text(&i["alias_email"]),
-        attachments: v["attachments"].as_array().map_or(0, Vec::len),
+        attachments: attachments(&v["attachments"]),
     })
+}
+fn attachments(v: &Value) -> Vec<Attachment> {
+    let Some(a) = v.as_array() else {
+        return vec![];
+    };
+    a.iter()
+        .map(|a| {
+            let c = if a["content"].is_object() {
+                &a["content"]
+            } else {
+                a
+            };
+            Attachment {
+                id: text(&a["id"]),
+                name: nonempty(text(&c["name"]), "Attachment"),
+                size: a["size"].as_u64().unwrap_or(0),
+                mime_type: text(&c["mime_type"]),
+            }
+        })
+        .collect()
+}
+/// Human-readable size with binary units, like pass-cli's own output.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = bytes as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
+}
+
+/// Editable subset of a login. Secret values are zeroized when dropped.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoginDraft {
+    pub title: String,
+    pub username: String,
+    pub email: String,
+    /// `None` keeps the existing password when updating.
+    pub password: Option<zeroize::Zeroizing<String>>,
+    pub url: String,
+    pub note: String,
+}
+impl LoginDraft {
+    pub fn validate(&self) -> Result<()> {
+        if self.title.trim().is_empty() {
+            return Err("A title is required");
+        }
+        if !self.url.trim().is_empty() && !self.url.trim().contains('.') {
+            return Err("The website does not look like an address");
+        }
+        Ok(())
+    }
+    /// JSON for `pass-cli item create login --from-template -`, sent on stdin
+    /// so that secret values never appear in the process argument list.
+    pub fn template(&self) -> zeroize::Zeroizing<String> {
+        let opt = |s: &str| {
+            if s.trim().is_empty() {
+                Value::Null
+            } else {
+                Value::String(s.trim().into())
+            }
+        };
+        let mut v = serde_json::json!({
+            "title": self.title.trim(),
+            "username": opt(&self.username),
+            "email": opt(&self.email),
+            "password": self.password.as_deref().map_or(Value::Null, |p| Value::String(p.to_string())),
+            "totp_uri": Value::Null,
+            "urls": if self.url.trim().is_empty() { vec![] } else { vec![self.url.trim().to_owned()] },
+            "note": self.note,
+            "extra_fields": [],
+        });
+        let out = zeroize::Zeroizing::new(v.to_string());
+        if let Value::Object(o) = &mut v {
+            if let Some(Value::String(p)) = o.get_mut("password") {
+                p.zeroize();
+            }
+        }
+        out
+    }
+    /// Non-secret `field=value` pairs changed relative to `old`, for
+    /// `pass-cli item update`. The password is deliberately excluded: that
+    /// command only accepts values as command-line arguments.
+    pub fn changed_fields(&self, old: &LoginDraft) -> Vec<(&'static str, String)> {
+        let mut out = vec![];
+        for (k, new, old) in [
+            ("title", &self.title, &old.title),
+            ("username", &self.username, &old.username),
+            ("email", &self.email, &old.email),
+            ("url", &self.url, &old.url),
+            ("note", &self.note, &old.note),
+        ] {
+            if new.trim() != old.trim() {
+                out.push((k, new.trim().to_owned()));
+            }
+        }
+        out
+    }
+}
+/// Pre-fill an editor from a parsed detail (no secrets are available here).
+pub fn draft_from(d: &Detail) -> LoginDraft {
+    let get = |k: &str| {
+        d.fields
+            .iter()
+            .find(|f| f.key == k && f.section.is_empty())
+            .and_then(|f| f.value.clone())
+            .unwrap_or_default()
+    };
+    LoginDraft {
+        title: d.item.title.clone(),
+        username: get("username"),
+        email: get("email"),
+        password: None,
+        url: d.urls.first().cloned().unwrap_or_default(),
+        note: d.note.clone(),
+    }
 }
 pub fn totp(s: &str, field: &str) -> Result<String> {
     let v = json(s)?;
