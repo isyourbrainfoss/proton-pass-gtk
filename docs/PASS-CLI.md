@@ -1,4 +1,4 @@
-# pass-cli notes (version 2.7.0, checked 2026-11-05)
+# pass-cli notes (version 2.7.0, checked 2026-11-05, extended 2026-11-11)
 
 Source: `pass-cli --help` (2.7.0, ba80a19), the official docs at
 <https://protonpass.github.io/pass-cli/> and the sources at
@@ -81,6 +81,32 @@ Source: `pass-cli --help` (2.7.0, ba80a19), the official docs at
 | Update fields | `item update --share-id S --item-id I --field k=v …` | Values are **argv**. The app only sends non-secret fields (`title`, `username`, `email`, `url`, `note`) and refuses password changes. TOTP/time fields cannot be updated by the CLI. |
 | Trash (reversible) | `item trash --share-id S --item-id I` | `item delete` is permanent and is not used. |
 | Attachment download | `item attachment download --share-id S --item-id I --attachment-id A --output PATH` | Read-only. Attachment metadata in `item view` JSON is `attachments:[{id, size, content:{name, mime_type}}]` (from `view.rs`; exact JSON not yet seen from a real account). |
+
+### Feature-parity commands (2026-11-11, from `--help` of every subcommand and the sources at commit `ff1a3c9`)
+
+2.7.0 is still the newest release in `versions.json` on 2026-11-11.
+Mutating commands are wired up but disabled for real accounts unless
+`PPG_ENABLE_REAL_EDITS=1` is set.
+
+| Purpose | Command | Output / notes |
+|---|---|---|
+| Create any type | `item create {login,note,credit-card,wifi,custom,identity} --share-id S --from-template -` | Template on **stdin**. Prints the new **item ID** (`println!("{res}")`). Template keys: card `{title, cardholder_name, card_type, number, cvv, expiration_date (YYYY-MM), pin, note, extra_fields}`; wifi `{title, ssid (required), password, security, note, extra_fields}`; identity `{title, note, full_name, email, phone_number, first/middle/last_name, birthdate, gender, organization, street_address, zip_or_postal_code, city, state_or_province, country_or_region, floor, county, social_security_number, passport_number, license_number, website, x_handle, second_phone_number, linkedin, reddit, facebook, yahoo, instagram, company, job_title, personal_website, work_phone_number, work_email, extra_fields}`; custom `{title, note, sections:[{section_name, fields:[{field_name, field_type, value}]}], extra_fields}`; note `{title, note, extra_fields}`. `extra_fields: [{kind: text|hidden|totp, title, value}]`. `--get-template` needs a session. |
+| SSH key | `item create ssh-key generate --share-id S --title T --key-type ed25519|rsa2048|rsa4096 [--comment]` | Key pair made inside pass-cli. `--password` (passphrase) prompts on a TTY, so the GUI does not offer it. `ssh-key import --from-private-key FILE` also exists. |
+| Alias | `item alias create --share-id S --prefix P --output json` | `{"id","alias"}`. The suffix and mailbox are chosen by the CLI. No other alias management exists. |
+| Trash list | `item list --share-id S --filter-state trashed --output json` | Same shape as the active list, `state: "Trashed"` |
+| Restore | `item untrash --share-id S --item-id I` | |
+| Delete forever | `item delete --share-id S --item-id I` | The app only offers it for trashed items, after a confirmation |
+| Move | `item move --from-share-id A --item-id I --to-share-id B` (also `--to-folder-id`, `--to-share-root`) | The item may get a new ID; the app reloads by title |
+| Vaults | `vault create --name N` (prints share ID), `vault update --share-id S --name N`, `vault delete --share-id S`, `vault transfer <member-share-id>` | |
+| Members | `vault member list --share-id S --output json`, `vault member update --member-share-id M --role R`, `vault member remove --member-share-id M`; same under `item member … --item-id I` | JSON: `[{member_share_id, email, name, is_group_share, role: "Owner"|"Manager"|"Editor"|"Viewer"|{"Custom":{name,permission}}, target_type}]` |
+| Share | `vault share --share-id S --role viewer|editor|manager EMAIL`, `item share --share-id S --item-id I --role R EMAIL` | The app rejects emails starting with `-` |
+| Invites | `invite list --output json`, `invite accept ID`, `invite reject ID` | JSON: `{"invites":[{token, invite_type: vault|item, inviter, name?}]}`. ⚠ The JSON prints `token`, while human output and `accept` use the invite **ID**. Must be checked with a real invite. |
+| Folders | `folder list|create|update|delete|move`, `--folder-id` on create | Not used yet (planned) |
+| Export | `export archive [--vault-name N]… [--include-attachments] [--encrypt [--password-env VAR]] -o FILE` | HTML with every secret, written 0600. `--encrypt` reads its password from an **environment variable or a TTY** (`rpassword`), so the GUI only offers the unencrypted archive, with a warning. |
+| Generator | `password generate random [--length --numbers --uppercase --symbols] --output json`, `password generate passphrase [--count --separator --capitalise --numbers] --output json` | `{"password": "…"}`. **Works without a session and offline.** The app uses it for passphrases. Random passwords are generated locally, so it works in the demo too. |
+| Score | `password score PASSWORD --output json` | `{numeric_score, password_score, penalties}`. Takes the password on **argv**, so it is not used. |
+| Item update caveats | `item update --field name=value [--field-type text|hidden|totp]` | Values are argv. A **name the CLI does not recognise creates a new custom field** instead of failing. Field names: `title`, `note`, `urls` (login websites, comma-joined), `address` (identity street), `verification_number` (card CVV), … |
+| Not available | — | Item history/revisions, Secure Links, Pass Monitor / password health / dark web, import, attachment upload/delete, alias mailboxes/domains/toggle, emergency access, notifications, offline cache |
 
 Other commands: `item create/update/delete/trash/untrash/move/share`,
 `item attachment`, `item alias`, `password generate|score`, `vault

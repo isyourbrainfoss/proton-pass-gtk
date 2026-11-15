@@ -2,5 +2,6 @@
 #[cfg(feature = "ui")]
 pub mod backend;
 pub mod commands;
+pub mod generator;
 pub mod model;
 pub mod prefs;

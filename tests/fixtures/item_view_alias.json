@@ -1,0 +1,22 @@
+{
+  "item": {
+    "id": "itm_13",
+    "share_id": "shr_1111",
+    "vault_id": "vlt_AAAA",
+    "content": {
+      "title": "Newsletter alias",
+      "note": "Hide-my-email alias for newsletters.",
+      "item_uuid": "itm_13-demo",
+      "content": "Alias",
+      "extra_fields": [],
+      "platform_specific": null,
+      "custom_icon": null
+    },
+    "state": "Active",
+    "flags": [],
+    "create_time": "2026-03-01T10:00:00",
+    "modify_time": "2026-10-20T10:00:00",
+    "alias_email": "newsletter.demo123@passinbox.invalid"
+  },
+  "attachments": []
+}

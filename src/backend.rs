@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use crate::{
     commands,
-    model::{self, Attachment, Detail, Field, Item, Kind, LoginDraft, Vault},
+    generator::{self, PassphraseOptions},
+    model::{
+        self, Attachment, Detail, Field, Invite, Item, ItemDraft, Kind, LoginDraft, Member, Vault,
+    },
 };
 use futures_util::lock::Mutex;
 use gtk::{gio, glib, prelude::*};
@@ -38,6 +41,33 @@ struct MockEntry {
 struct MockState {
     shares: HashMap<String, Vec<MockEntry>>,
     next_id: u32,
+    vaults: Option<Vec<Vault>>,
+    members: HashMap<String, Vec<Member>>,
+    invites: Option<Vec<Invite>>,
+}
+pub const ERR_SECRET_ARGV: &str = "Changing hidden values is not supported here: pass-cli only accepts new values on the command line. Use another Proton Pass client.";
+fn validate_email(email: &str) -> Result<(), &'static str> {
+    let e = email.trim();
+    let ok = e.len() <= 254
+        && !e.starts_with('-')
+        && !e.chars().any(char::is_whitespace)
+        && e.split_once('@')
+            .is_some_and(|(l, d)| !l.is_empty() && d.contains('.') && !d.starts_with('.'));
+    if ok {
+        Ok(())
+    } else {
+        Err("Enter a valid email address")
+    }
+}
+fn validate_name(name: &str) -> Result<&str, &'static str> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("A name is required");
+    }
+    if n.starts_with('-') || n.chars().count() > 100 || n.chars().any(char::is_control) {
+        return Err("Use a shorter name without control characters or a leading dash");
+    }
+    Ok(n)
 }
 
 #[derive(Clone)]
@@ -194,7 +224,13 @@ impl Backend {
     }
     pub async fn vaults(&self) -> Result<Vec<Vault>, &'static str> {
         if self.mock {
-            return model::vaults(include_str!("../tests/fixtures/vault_list.json"));
+            let mut st = self.state.borrow_mut();
+            if st.vaults.is_none() {
+                st.vaults = Some(model::vaults(include_str!(
+                    "../tests/fixtures/vault_list.json"
+                ))?);
+            }
+            return Ok(st.vaults.clone().unwrap_or_default());
         }
         model::vaults(&self.run(commands::vaults()).await?)
     }
@@ -206,9 +242,14 @@ impl Backend {
             include_str!("../tests/fixtures/item_view_note.json"),
             include_str!("../tests/fixtures/item_view_custom.json"),
             include_str!("../tests/fixtures/item_view_totp_periods.json"),
+            include_str!("../tests/fixtures/item_view_identity.json"),
+            include_str!("../tests/fixtures/item_view_sshkey.json"),
+            include_str!("../tests/fixtures/item_view_wifi.json"),
+            include_str!("../tests/fixtures/item_view_alias.json"),
         ] {
             let mut d = model::detail(fixture)?;
             d.item.share_id = share.into();
+            d.item.state = "active".into();
             if d.item.id == "itm_01" {
                 d.attachments = vec![
                     Attachment {
@@ -231,21 +272,27 @@ impl Backend {
                 secrets: HashMap::new(),
             });
         }
-        for (kind, title) in [
-            ("identity", "Demo identity"),
-            ("sshkey", "Demo SSH key"),
-            ("wifi", "Demo Wi-Fi"),
-            ("alias", "Demo alias"),
+        // Two demo items already in the trash.
+        for (id, title, user) in [
+            ("trash_1", "Old demo forum", "former_demo_user"),
+            ("trash_2", "Expired demo shop", "shopper@example.invalid"),
         ] {
-            a.push(MockEntry {
-                item: Item {
-                    id: kind.into(),
-                    share_id: share.into(),
-                    title: title.into(),
-                    kind: kind.into(),
-                    state: "active".into(),
-                },
+            let item = Item {
+                id: id.into(),
+                share_id: share.into(),
+                title: title.into(),
+                kind: "login".into(),
+                state: "trashed".into(),
+            };
+            let draft = LoginDraft {
+                title: title.into(),
+                username: user.into(),
                 ..Default::default()
+            };
+            a.push(MockEntry {
+                detail: Some(mock_detail(&item, &ItemDraft::from(&draft))),
+                item,
+                secrets: HashMap::new(),
             });
         }
         Ok(a)
@@ -265,7 +312,10 @@ impl Backend {
     pub async fn items(&self, share: &str) -> Result<Vec<Item>, &'static str> {
         if self.mock {
             let mut a = self.with_mock(share, |e, _| {
-                e.iter().map(|e| e.item.clone()).collect::<Vec<_>>()
+                e.iter()
+                    .filter(|e| e.item.state == "active")
+                    .map(|e| e.item.clone())
+                    .collect::<Vec<_>>()
             })?;
             a.sort_by_key(|i| i.title.to_lowercase());
             return Ok(a);
@@ -343,41 +393,7 @@ impl Backend {
         draft: &LoginDraft,
     ) -> Result<Item, &'static str> {
         draft.validate()?;
-        if self.mock {
-            return self.with_mock(share, |e, next| {
-                *next += 1;
-                let item = Item {
-                    id: format!("demo_new_{next}"),
-                    share_id: share.into(),
-                    title: draft.title.trim().into(),
-                    kind: "login".into(),
-                    state: "active".into(),
-                };
-                let mut entry = MockEntry {
-                    item: item.clone(),
-                    detail: Some(mock_login_detail(&item, draft)),
-                    secrets: HashMap::new(),
-                };
-                if let Some(p) = &draft.password {
-                    entry.secrets.insert("password".into(), p.clone());
-                }
-                e.push(entry);
-                item
-            });
-        }
-        if !self.real_edits {
-            return Err(ERR_EDITING_DISABLED);
-        }
-        self.run_input(commands::create_login(share), Some(draft.template()))
-            .await?;
-        // pass-cli does not document the create output; reload to find it.
-        Ok(Item {
-            id: String::new(),
-            share_id: share.into(),
-            title: draft.title.trim().into(),
-            kind: "login".into(),
-            state: "active".into(),
-        })
+        self.create_item(share, &ItemDraft::from(draft)).await
     }
     pub async fn update_login(
         &self,
@@ -386,52 +402,17 @@ impl Backend {
         new: &LoginDraft,
     ) -> Result<Item, &'static str> {
         new.validate()?;
-        let mut item = i.clone();
-        item.title = new.title.trim().into();
-        if self.mock {
-            return self.with_mock(&i.share_id, |e, _| {
-                let Some(entry) = e.iter_mut().find(|e| e.item.id == i.id) else {
-                    return Err("The item no longer exists");
-                };
-                let mut d = mock_login_detail(&item, new);
-                if let Some(old) = &entry.detail {
-                    // Keep fields the editor does not touch (TOTP, custom, files).
-                    d.fields.extend(
-                        old.fields
-                            .iter()
-                            .filter(|f| {
-                                !matches!(f.key.as_str(), "username" | "email" | "password")
-                                    || !f.section.is_empty()
-                            })
-                            .cloned(),
-                    );
-                    d.attachments = old.attachments.clone();
-                }
-                entry.item = item.clone();
-                entry.detail = Some(d);
-                if let Some(p) = &new.password {
-                    entry.secrets.insert("password".into(), p.clone());
-                }
-                Ok(item.clone())
-            })?;
-        }
-        if !self.real_edits {
-            return Err(ERR_EDITING_DISABLED);
-        }
-        if new.password.is_some() {
-            return Err(ERR_PASSWORD_ARGV);
-        }
-        let fields = new.changed_fields(old);
-        if !fields.is_empty() {
-            self.run(commands::update(&i.share_id, &i.id, &fields))
-                .await?;
-        }
-        Ok(item)
+        self.update_item(i, &ItemDraft::from(old), &ItemDraft::from(new))
+            .await
     }
     /// Moves to the trash (reversible in Proton Pass), never a hard delete.
     pub async fn trash(&self, i: &Item) -> Result<(), &'static str> {
         if self.mock {
-            return self.with_mock(&i.share_id, |e, _| e.retain(|e| e.item.id != i.id));
+            return self.with_mock(&i.share_id, |e, _| {
+                for e in e.iter_mut().filter(|e| e.item.id == i.id) {
+                    e.item.state = "trashed".into();
+                }
+            });
         }
         if !self.real_edits {
             return Err(ERR_EDITING_DISABLED);
@@ -534,38 +515,593 @@ impl Backend {
         Ok(())
     }
 }
-fn mock_login_detail(item: &Item, d: &LoginDraft) -> Detail {
-    let mut fields = vec![];
-    for (key, v) in [("email", &d.email), ("username", &d.username)] {
-        if !v.trim().is_empty() {
-            fields.push(Field {
-                key: key.into(),
-                label: key.into(),
-                kind: Kind::Text,
-                value: Some(v.trim().into()),
-                section: String::new(),
-                period: 0,
-            });
+impl Backend {
+    fn require_edits(&self) -> Result<(), &'static str> {
+        if self.real_edits {
+            Ok(())
+        } else {
+            Err(ERR_EDITING_DISABLED)
         }
     }
-    fields.push(Field {
-        key: "password".into(),
-        label: "password".into(),
-        kind: Kind::Hidden,
-        value: None,
-        section: String::new(),
-        period: 0,
-    });
+    /// Create an item of any supported type. Secrets travel on stdin only.
+    pub async fn create_item(&self, share: &str, draft: &ItemDraft) -> Result<Item, &'static str> {
+        draft.validate()?;
+        if self.mock {
+            return self.with_mock(share, |e, next| {
+                *next += 1;
+                let (title, alias) = if draft.kind == "alias" {
+                    let a = format!("{}.demo{next:03}@passinbox.invalid", draft.extra.trim());
+                    (a.clone(), a)
+                } else {
+                    (draft.title.trim().to_owned(), String::new())
+                };
+                let item = Item {
+                    id: format!("demo_new_{next}"),
+                    share_id: share.into(),
+                    title,
+                    kind: draft.kind.clone(),
+                    state: "active".into(),
+                };
+                let mut detail = mock_detail(&item, draft);
+                detail.alias = alias;
+                if draft.kind == "sshkey" {
+                    detail.fields.push(Field {
+                        key: "public_key".into(),
+                        label: "public key".into(),
+                        kind: Kind::Text,
+                        value: Some(format!(
+                            "ssh-{} AAAAFAKEdemo{next}notarealkey demo@example.invalid",
+                            if draft.extra.starts_with("rsa") {
+                                "rsa"
+                            } else {
+                                "ed25519"
+                            }
+                        )),
+                        section: String::new(),
+                        period: 0,
+                    });
+                    detail.fields.push(Field {
+                        key: "private_key".into(),
+                        label: "private key".into(),
+                        kind: Kind::Hidden,
+                        value: None,
+                        section: String::new(),
+                        period: 0,
+                    });
+                }
+                let mut entry = MockEntry {
+                    item: item.clone(),
+                    detail: Some(detail),
+                    secrets: HashMap::new(),
+                };
+                for spec in model::field_specs(&draft.kind).iter().filter(|s| s.hidden) {
+                    let v = draft.get(spec.key);
+                    if !v.is_empty() {
+                        let key = if draft.kind == "custom" {
+                            spec.label
+                        } else {
+                            spec.key
+                        };
+                        entry
+                            .secrets
+                            .insert(key.into(), Zeroizing::new(v.to_owned()));
+                    }
+                }
+                e.push(entry);
+                item
+            });
+        }
+        self.require_edits()?;
+        let title = draft.title.trim().to_owned();
+        let out = match draft.kind.as_str() {
+            "alias" => {
+                let out = self
+                    .run(commands::create_alias(share, draft.extra.trim()))
+                    .await?;
+                let (id, alias) = model::created_alias(&out)?;
+                return Ok(Item {
+                    id,
+                    share_id: share.into(),
+                    title: alias,
+                    kind: "alias".into(),
+                    state: "active".into(),
+                });
+            }
+            "sshkey" => {
+                let key_type = if draft.extra.is_empty() {
+                    "ed25519"
+                } else {
+                    &draft.extra
+                };
+                self.run(commands::generate_ssh_key(share, &title, key_type))
+                    .await?
+            }
+            kind => {
+                let sub =
+                    model::create_subcommand(kind).ok_or("This item type cannot be created")?;
+                self.run_input(commands::create_item(sub, share), Some(draft.template()))
+                    .await?
+            }
+        };
+        // pass-cli prints the new item ID on success (`println!("{res}")`).
+        let id = out.trim();
+        let id = if !id.is_empty() && !id.contains(char::is_whitespace) {
+            id.to_owned()
+        } else {
+            String::new()
+        };
+        Ok(Item {
+            id,
+            share_id: share.into(),
+            title,
+            kind: draft.kind.clone(),
+            state: "active".into(),
+        })
+    }
+    /// Update an item. Real accounts: only non-secret fields, via argv.
+    pub async fn update_item(
+        &self,
+        i: &Item,
+        old: &ItemDraft,
+        new: &ItemDraft,
+    ) -> Result<Item, &'static str> {
+        new.validate()?;
+        let mut item = i.clone();
+        item.title = new.title.trim().into();
+        if self.mock {
+            return self.with_mock(&i.share_id, |e, _| {
+                let Some(entry) = e.iter_mut().find(|e| e.item.id == i.id) else {
+                    return Err("The item no longer exists");
+                };
+                let mut d = mock_detail(&item, new);
+                if let Some(old) = &entry.detail {
+                    let edited: Vec<String> = d.fields.iter().map(|f| f.key.clone()).collect();
+                    let spec_keys: Vec<&str> = model::field_specs(&new.kind)
+                        .iter()
+                        .map(|s| if new.kind == "custom" { s.label } else { s.key })
+                        .collect();
+                    // Keep fields the editor does not touch (TOTP, sections, files)
+                    // and hidden values left empty (= unchanged).
+                    let kept: Vec<Field> = old
+                        .fields
+                        .iter()
+                        .filter(|f| {
+                            let editable_text = f.kind == Kind::Text
+                                && spec_keys.contains(&f.key.as_str())
+                                && (f.section.is_empty() || new.kind == "custom");
+                            !edited.contains(&f.key) && !editable_text
+                        })
+                        .cloned()
+                        .collect();
+                    d.fields.extend(kept);
+                    d.attachments = old.attachments.clone();
+                    d.passkeys = old.passkeys.clone();
+                    d.alias = old.alias.clone();
+                }
+                for spec in model::field_specs(&new.kind).iter().filter(|s| s.hidden) {
+                    let v = new.get(spec.key);
+                    if !v.is_empty() {
+                        let key = if new.kind == "custom" {
+                            spec.label
+                        } else {
+                            spec.key
+                        };
+                        entry
+                            .secrets
+                            .insert(key.into(), Zeroizing::new(v.to_owned()));
+                    }
+                }
+                entry.item = item.clone();
+                entry.detail = Some(d);
+                Ok(item.clone())
+            })?;
+        }
+        self.require_edits()?;
+        if new.has_secret_change() {
+            return Err(if new.kind == "login" {
+                ERR_PASSWORD_ARGV
+            } else {
+                ERR_SECRET_ARGV
+            });
+        }
+        let fields = new.changed_fields(old);
+        if !fields.is_empty() {
+            let pairs: Vec<(&str, String)> = fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.clone()))
+                .collect();
+            self.run(commands::update(&i.share_id, &i.id, &pairs))
+                .await?;
+        }
+        Ok(item)
+    }
+    /// Trashed items of all given vaults.
+    pub async fn trashed(&self, vaults: &[Vault]) -> Result<Vec<Item>, &'static str> {
+        let mut out = vec![];
+        for v in vaults {
+            if self.mock {
+                out.extend(self.with_mock(&v.share_id, |e, _| {
+                    e.iter()
+                        .filter(|e| e.item.state == "trashed")
+                        .map(|e| e.item.clone())
+                        .collect::<Vec<_>>()
+                })?);
+            } else {
+                out.extend(
+                    model::items(&self.run(commands::trashed_items(&v.share_id)).await?)?
+                        .into_iter()
+                        .filter(|i| i.state == "trashed"),
+                );
+            }
+        }
+        out.sort_by_key(|i| i.title.to_lowercase());
+        Ok(out)
+    }
+    pub async fn untrash(&self, i: &Item) -> Result<(), &'static str> {
+        if self.mock {
+            return self.with_mock(&i.share_id, |e, _| {
+                for e in e.iter_mut().filter(|e| e.item.id == i.id) {
+                    e.item.state = "active".into();
+                }
+            });
+        }
+        self.require_edits()?;
+        self.run(commands::untrash(&i.share_id, &i.id)).await?;
+        Ok(())
+    }
+    /// Permanently delete an item that is already in the trash.
+    pub async fn delete_forever(&self, i: &Item) -> Result<(), &'static str> {
+        if i.state != "trashed" {
+            return Err("Only items in the trash can be deleted permanently");
+        }
+        if self.mock {
+            return self.with_mock(&i.share_id, |e, _| e.retain(|e| e.item.id != i.id));
+        }
+        self.require_edits()?;
+        self.run(commands::delete(&i.share_id, &i.id)).await?;
+        Ok(())
+    }
+    pub async fn move_item(&self, i: &Item, to: &Vault) -> Result<Item, &'static str> {
+        if i.share_id == to.share_id {
+            return Err("The item is already in this vault");
+        }
+        let mut moved = i.clone();
+        moved.share_id = to.share_id.clone();
+        if self.mock {
+            let entry = self.with_mock(&i.share_id, |e, _| {
+                let pos = e.iter().position(|e| e.item.id == i.id)?;
+                Some(e.remove(pos))
+            })?;
+            let mut entry = entry.ok_or("The item no longer exists")?;
+            entry.item.share_id = to.share_id.clone();
+            if let Some(d) = &mut entry.detail {
+                d.item.share_id = to.share_id.clone();
+            }
+            self.with_mock(&to.share_id, |e, _| e.push(entry))?;
+            return Ok(moved);
+        }
+        self.require_edits()?;
+        self.run(commands::move_item(&i.share_id, &i.id, &to.share_id))
+            .await?;
+        // The CLI may assign a new item ID in the destination vault.
+        moved.id = String::new();
+        Ok(moved)
+    }
+    pub async fn create_vault(&self, name: &str) -> Result<Vault, &'static str> {
+        let name = validate_name(name)?.to_owned();
+        if self.mock {
+            self.vaults().await?;
+            let mut st = self.state.borrow_mut();
+            st.next_id += 1;
+            let v = Vault {
+                name,
+                share_id: format!("shr_demo_{}", st.next_id),
+            };
+            st.shares.insert(v.share_id.clone(), vec![]);
+            st.vaults.get_or_insert_with(Vec::new).push(v.clone());
+            return Ok(v);
+        }
+        self.require_edits()?;
+        let out = self.run(commands::vault_create(&name)).await?;
+        Ok(Vault {
+            name,
+            share_id: out.trim().to_owned(),
+        })
+    }
+    pub async fn rename_vault(&self, v: &Vault, name: &str) -> Result<Vault, &'static str> {
+        let name = validate_name(name)?.to_owned();
+        let renamed = Vault {
+            name: name.clone(),
+            share_id: v.share_id.clone(),
+        };
+        if self.mock {
+            self.vaults().await?;
+            let mut st = self.state.borrow_mut();
+            for x in st
+                .vaults
+                .iter_mut()
+                .flatten()
+                .filter(|x| x.share_id == v.share_id)
+            {
+                x.name = name.clone();
+            }
+            return Ok(renamed);
+        }
+        self.require_edits()?;
+        self.run(commands::vault_rename(&v.share_id, &name)).await?;
+        Ok(renamed)
+    }
+    /// Deletes the vault and every item in it. The UI asks for the vault name.
+    pub async fn delete_vault(&self, v: &Vault) -> Result<(), &'static str> {
+        if self.mock {
+            self.vaults().await?;
+            let mut st = self.state.borrow_mut();
+            let vaults = st.vaults.get_or_insert_with(Vec::new);
+            if vaults.len() <= 1 {
+                return Err("You cannot delete your last vault");
+            }
+            vaults.retain(|x| x.share_id != v.share_id);
+            st.shares.remove(&v.share_id);
+            return Ok(());
+        }
+        self.require_edits()?;
+        self.run(commands::vault_delete(&v.share_id)).await?;
+        Ok(())
+    }
+    fn mock_members(&self, key: &str) -> Vec<Member> {
+        self.state
+            .borrow_mut()
+            .members
+            .entry(key.into())
+            .or_insert_with(|| {
+                let mut m = vec![Member {
+                    share_id: format!("{key}_owner"),
+                    email: "demo.user@example.com".into(),
+                    name: "You (demo)".into(),
+                    role: "Owner".into(),
+                }];
+                if key == "shr_2222" {
+                    m.push(Member {
+                        share_id: "mbr_demo_colleague".into(),
+                        email: "colleague@example.invalid".into(),
+                        name: "Demo Colleague".into(),
+                        role: "Editor".into(),
+                    });
+                }
+                m
+            })
+            .clone()
+    }
+    /// Members of a vault, or of a single shared item when `item` is given.
+    pub async fn members(
+        &self,
+        share: &str,
+        item: Option<&Item>,
+    ) -> Result<Vec<Member>, &'static str> {
+        if self.mock {
+            let key = item.map_or(share.to_owned(), |i| format!("{share}/{}", i.id));
+            return Ok(self.mock_members(&key));
+        }
+        let args = match item {
+            Some(i) => commands::item_members(share, &i.id),
+            None => commands::vault_members(share),
+        };
+        model::members(&self.run(args).await?)
+    }
+    /// Invite someone to a vault or (with `item`) a single item.
+    pub async fn share(
+        &self,
+        share: &str,
+        item: Option<&Item>,
+        email: &str,
+        role: &str,
+    ) -> Result<(), &'static str> {
+        validate_email(email)?;
+        if !model::ROLES.iter().any(|(r, _)| *r == role) {
+            return Err("Unknown role");
+        }
+        let email = email.trim();
+        if self.mock {
+            let key = item.map_or(share.to_owned(), |i| format!("{share}/{}", i.id));
+            self.mock_members(&key);
+            let mut st = self.state.borrow_mut();
+            let list = st.members.get_mut(&key).unwrap();
+            if list.iter().any(|m| m.email.eq_ignore_ascii_case(email)) {
+                return Err("This person already has access");
+            }
+            st.next_id += 1;
+            let id = st.next_id;
+            let list = st.members.get_mut(&key).unwrap();
+            list.push(Member {
+                share_id: format!("mbr_demo_{id}"),
+                email: email.into(),
+                name: String::new(),
+                role: model::ROLES
+                    .iter()
+                    .find(|(r, _)| *r == role)
+                    .map_or("Viewer", |(_, l)| l)
+                    .into(),
+            });
+            return Ok(());
+        }
+        self.require_edits()?;
+        let args = match item {
+            Some(i) => commands::item_share(share, &i.id, email, role),
+            None => commands::vault_share(share, email, role),
+        };
+        self.run(args).await?;
+        Ok(())
+    }
+    pub async fn remove_member(&self, share: &str, m: &Member) -> Result<(), &'static str> {
+        if m.is_owner() {
+            return Err("The owner cannot be removed");
+        }
+        if self.mock {
+            for list in self.state.borrow_mut().members.values_mut() {
+                list.retain(|x| x.share_id != m.share_id);
+            }
+            return Ok(());
+        }
+        self.require_edits()?;
+        self.run(commands::vault_member_remove(share, &m.share_id))
+            .await?;
+        Ok(())
+    }
+    pub async fn set_member_role(
+        &self,
+        share: &str,
+        m: &Member,
+        role: &str,
+    ) -> Result<(), &'static str> {
+        if m.is_owner() {
+            return Err("The owner’s role cannot be changed");
+        }
+        let label = model::ROLES
+            .iter()
+            .find(|(r, _)| *r == role)
+            .map(|(_, l)| *l)
+            .ok_or("Unknown role")?;
+        if self.mock {
+            for list in self.state.borrow_mut().members.values_mut() {
+                for x in list.iter_mut().filter(|x| x.share_id == m.share_id) {
+                    x.role = label.into();
+                }
+            }
+            return Ok(());
+        }
+        self.require_edits()?;
+        self.run(commands::vault_member_role(share, &m.share_id, role))
+            .await?;
+        Ok(())
+    }
+    pub async fn invites(&self) -> Result<Vec<Invite>, &'static str> {
+        if self.mock {
+            let mut st = self.state.borrow_mut();
+            return Ok(st
+                .invites
+                .get_or_insert_with(|| {
+                    vec![Invite {
+                        token: "inv_demo_1".into(),
+                        kind: "vault".into(),
+                        inviter: "friend@example.invalid".into(),
+                        name: "Demo family vault".into(),
+                    }]
+                })
+                .clone());
+        }
+        model::invites(&self.run(commands::invites()).await?)
+    }
+    pub async fn respond_invite(&self, inv: &Invite, accept: bool) -> Result<(), &'static str> {
+        if self.mock {
+            self.invites().await?;
+            let mut st = self.state.borrow_mut();
+            if let Some(list) = st.invites.as_mut() {
+                list.retain(|i| i.token != inv.token);
+            }
+            if accept && inv.kind == "vault" {
+                st.next_id += 1;
+                let v = Vault {
+                    name: if inv.name.is_empty() {
+                        "Shared vault".into()
+                    } else {
+                        inv.name.clone()
+                    },
+                    share_id: format!("shr_demo_{}", st.next_id),
+                };
+                st.vaults.get_or_insert_with(Vec::new).push(v);
+            }
+            return Ok(());
+        }
+        self.require_edits()?;
+        self.run(commands::invite_respond(accept, &inv.token))
+            .await?;
+        Ok(())
+    }
+    /// Unencrypted HTML archive of all vaults. Mock: a small fake file.
+    pub async fn export(&self, dest: &Path, attachments: bool) -> Result<(), &'static str> {
+        if self.mock {
+            let body = "<!doctype html><title>FAKE Proton Pass demo export</title>\
+                <p>FAKE demo export from the Proton Pass GTK mock backend. It contains no real data.</p>\n";
+            return std::fs::write(dest, body).map_err(|_| "Could not save the demo export");
+        }
+        let dest = dest.to_str().ok_or("Unsupported file name")?;
+        self.run(commands::export_archive(dest, attachments))
+            .await?;
+        Ok(())
+    }
+    /// Passphrase from pass-cli's official generator (offline, no session).
+    /// The demo backend uses a tiny fake word list instead.
+    pub async fn passphrase(
+        &self,
+        o: &PassphraseOptions,
+    ) -> Result<Zeroizing<String>, &'static str> {
+        if self.mock {
+            return generator::demo_passphrase(o);
+        }
+        let out = self
+            .run(commands::generate_passphrase(
+                o.words.clamp(generator::MIN_WORDS, generator::MAX_WORDS),
+                &o.separator,
+                o.capitalise,
+                o.numbers,
+            ))
+            .await?;
+        model::generated_password(&out)
+    }
+}
+/// Demo detail for a draft: text values are shown, hidden values become
+/// masked fields whose fake value lives in `MockEntry::secrets`.
+fn mock_detail(item: &Item, d: &ItemDraft) -> Detail {
+    let mut fields = vec![];
+    for spec in model::field_specs(&d.kind) {
+        let v = d.get(spec.key).trim();
+        let always = d.kind == "login" && spec.key == "password";
+        if v.is_empty() && !always {
+            continue;
+        }
+        let custom = d.kind == "custom";
+        fields.push(Field {
+            key: if custom {
+                spec.label.into()
+            } else {
+                spec.key.into()
+            },
+            label: if custom {
+                spec.label.into()
+            } else {
+                spec.key.replace('_', " ")
+            },
+            kind: if spec.key == "totp" {
+                Kind::Totp
+            } else if spec.hidden {
+                Kind::Hidden
+            } else {
+                Kind::Text
+            },
+            value: (!spec.hidden).then(|| v.to_owned()),
+            section: if custom {
+                "Custom fields".into()
+            } else {
+                String::new()
+            },
+            period: if spec.key == "totp" {
+                model::totp_period(v)
+            } else {
+                0
+            },
+        });
+    }
     Detail {
         item: item.clone(),
         fields,
         note: d.note.clone(),
-        urls: if d.url.trim().is_empty() {
+        urls: if d.url.trim().is_empty() || d.kind != "login" {
             vec![]
         } else {
             vec![d.url.trim().into()]
         },
         alias: String::new(),
         attachments: vec![],
+        passkeys: vec![],
     }
 }

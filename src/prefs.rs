@@ -2,6 +2,7 @@
 //! Non-secret user preferences, stored as a small `key=value` file in the
 //! XDG config directory (inside Flatpak: `~/.var/app/<app-id>/config`).
 //! Never store credentials, extra passwords, codes or item contents here.
+use crate::generator::{self, PassphraseOptions, RandomOptions};
 use std::path::{Path, PathBuf};
 
 pub const CLIPBOARD_CHOICES: [u32; 6] = [10, 20, 30, 45, 60, 90];
@@ -48,6 +49,20 @@ pub struct Prefs {
     pub color_scheme: ColorScheme,
     /// Ask for the Pass extra password before signing in.
     pub extra_password: bool,
+    /// Search usernames, websites, notes and aliases too. For real accounts
+    /// this loads each item’s details one at a time in the background.
+    pub deep_search: bool,
+    /// Password generator defaults (options only, never generated values).
+    pub gen_passphrase: bool,
+    pub gen_length: u32,
+    pub gen_uppercase: bool,
+    pub gen_numbers: bool,
+    pub gen_symbols: bool,
+    pub gen_avoid_ambiguous: bool,
+    pub gen_words: u32,
+    pub gen_separator: String,
+    pub gen_capitalise: bool,
+    pub gen_word_numbers: bool,
 }
 impl Default for Prefs {
     fn default() -> Self {
@@ -60,6 +75,17 @@ impl Default for Prefs {
             last_vault: String::new(),
             color_scheme: ColorScheme::System,
             extra_password: false,
+            deep_search: false,
+            gen_passphrase: false,
+            gen_length: 20,
+            gen_uppercase: true,
+            gen_numbers: true,
+            gen_symbols: true,
+            gen_avoid_ambiguous: false,
+            gen_words: 5,
+            gen_separator: "hyphens".into(),
+            gen_capitalise: true,
+            gen_word_numbers: true,
         }
     }
 }
@@ -114,6 +140,29 @@ impl Prefs {
                     }
                 }
                 "extra-password" => p.extra_password = v == "true",
+                "deep-search" => p.deep_search = v == "true",
+                "generator-mode" => p.gen_passphrase = v == "passphrase",
+                "generator-length" => {
+                    if let Some(n) = num() {
+                        p.gen_length = n.clamp(generator::MIN_LENGTH, generator::MAX_LENGTH);
+                    }
+                }
+                "generator-uppercase" => p.gen_uppercase = v == "true",
+                "generator-numbers" => p.gen_numbers = v == "true",
+                "generator-symbols" => p.gen_symbols = v == "true",
+                "generator-avoid-ambiguous" => p.gen_avoid_ambiguous = v == "true",
+                "generator-words" => {
+                    if let Some(n) = num() {
+                        p.gen_words = n.clamp(generator::MIN_WORDS, generator::MAX_WORDS);
+                    }
+                }
+                "generator-separator" => {
+                    if generator::SEPARATORS.iter().any(|(k, _)| *k == v) {
+                        p.gen_separator = v.into();
+                    }
+                }
+                "generator-capitalise" => p.gen_capitalise = v == "true",
+                "generator-word-numbers" => p.gen_word_numbers = v == "true",
                 _ => (),
             }
         }
@@ -123,7 +172,11 @@ impl Prefs {
         format!(
             "# Proton Pass GTK preferences. Contains no secrets.\n\
              clipboard-seconds={}\nauto-lock-minutes={}\nwidth={}\nheight={}\n\
-             maximized={}\nlast-vault={}\ncolor-scheme={}\nextra-password={}\n",
+             maximized={}\nlast-vault={}\ncolor-scheme={}\nextra-password={}\n\
+             deep-search={}\ngenerator-mode={}\ngenerator-length={}\n\
+             generator-uppercase={}\ngenerator-numbers={}\ngenerator-symbols={}\n\
+             generator-avoid-ambiguous={}\ngenerator-words={}\ngenerator-separator={}\n\
+             generator-capitalise={}\ngenerator-word-numbers={}\n",
             self.clipboard_seconds,
             self.auto_lock_minutes,
             self.width,
@@ -131,8 +184,40 @@ impl Prefs {
             self.maximized,
             self.last_vault,
             self.color_scheme.as_str(),
-            self.extra_password
+            self.extra_password,
+            self.deep_search,
+            if self.gen_passphrase {
+                "passphrase"
+            } else {
+                "random"
+            },
+            self.gen_length,
+            self.gen_uppercase,
+            self.gen_numbers,
+            self.gen_symbols,
+            self.gen_avoid_ambiguous,
+            self.gen_words,
+            self.gen_separator,
+            self.gen_capitalise,
+            self.gen_word_numbers,
         )
+    }
+    pub fn random_options(&self) -> RandomOptions {
+        RandomOptions {
+            length: self.gen_length,
+            uppercase: self.gen_uppercase,
+            numbers: self.gen_numbers,
+            symbols: self.gen_symbols,
+            avoid_ambiguous: self.gen_avoid_ambiguous,
+        }
+    }
+    pub fn passphrase_options(&self) -> PassphraseOptions {
+        PassphraseOptions {
+            words: self.gen_words,
+            separator: self.gen_separator.clone(),
+            capitalise: self.gen_capitalise,
+            numbers: self.gen_word_numbers,
+        }
     }
     pub fn load(path: &Path) -> Self {
         std::fs::read_to_string(path)

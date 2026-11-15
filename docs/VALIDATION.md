@@ -1,3 +1,19 @@
+# Local verification — feature parity (`feat/feature-parity`)
+
+Date: 2026-11-11 (Europe/Oslo / CET). Demo backend and fake pass-cli only; no
+Proton account, credentials or real secrets used.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | PASS |
+| `cargo test --locked` | PASS: 39 parsing/command/preference tests + 11 parity tests (generator, search, drafts, templates, members) + 9 backend tests (fake CLI + mock flows) |
+| `cargo test --locked --no-default-features` | PASS: 39 + 11 tests without GTK |
+| Mock-only ignored GTK regression test under Xvfb | PASS (~36 s): previous checks plus search by username/email/alias, generator, opening every item type, trash/vault/share/invite/move/export dialogs, lock wipes the search index and generator history |
+| Meson build + `meson test` | PASS (2/2) |
+| Parity screenshots (`build-aux/screenshots-parity.sh`, Xvfb 1920x1200) | 80 images (20 states × 360x720 / 1280x800 × light/dark) in `screenshots/rust/parity/`, sampled and visually inspected |
+| Fake CLI argv checks | PASS: credit-card number and other hidden template values never appear in argv |
+| Real login, real writes, sharing, invites, export, passphrase via pass-cli | NOT TESTED (needs a real account; see the checklist in FEATURE-PARITY.md) |
+
 # Local verification — mock features (`feat/mock-features`)
 
 Date: 2026-11-11 (Europe/Oslo / CET). Demo backend only; no Proton account,
