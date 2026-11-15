@@ -25,4 +25,17 @@ explicit D-Bus talk name. The network is required by pass-cli.
 The official pass-cli 2.7.0 is GPL-3.0-or-later. Sources and matching version:
 https://github.com/protonpass/pass-cli/tree/2.7.0 . Download SHA-256 hashes are
 pinned from https://proton.me/download/pass-cli/versions.json; see ../fetch-pass-cli.sh.
-No binaries are committed. This is not a Flathub submission or publication.
+No binaries are committed. This is not a Flathub submission.
+
+## Publishing
+
+Pushing a `v*` tag makes CI build both arches (branch `stable`), attach
+`io.github.isyourbrainfoss.ProtonPassGtk-{x86_64,aarch64}.flatpak` (+ `.sha256`) to the GitHub
+Release, and notify [isyourbrainfoss/flatpak](https://github.com/isyourbrainfoss/flatpak). That repo
+signs and serves them at https://isyourbrainfoss.github.io/flatpak/ (remote `isyourbrainfoss`):
+
+```sh
+flatpak remote-add --user --if-not-exists isyourbrainfoss \
+  https://isyourbrainfoss.github.io/flatpak/isyourbrainfoss.flatpakrepo
+flatpak install --user isyourbrainfoss io.github.isyourbrainfoss.ProtonPassGtk
+```

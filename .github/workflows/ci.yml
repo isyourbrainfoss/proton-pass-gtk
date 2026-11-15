@@ -2,6 +2,8 @@ name: Rust and Flatpak
 on:
   push:
     branches: [main, feat/rust]
+    # A v* tag builds both arches and publishes them to the shared signed Flatpak repo.
+    tags: ['v*']
   pull_request:
 permissions:
   contents: read
@@ -44,10 +46,57 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive -y flathub org.gnome.Platform//51 org.gnome.Sdk//51 org.freedesktop.Sdk.Extension.rust-stable//26.08
       - name: Build offline in the sandbox
-        run: flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build build-aux/flatpak/io.github.isyourbrainfoss.ProtonPassGtk.json
-      - name: Create local bundle (not published)
-        run: flatpak build-bundle flatpak-repo proton-pass-gtk-${{ matrix.arch }}.flatpak io.github.isyourbrainfoss.ProtonPassGtk
+        run: flatpak-builder --user --force-clean --default-branch=stable --repo=flatpak-repo flatpak-build build-aux/flatpak/io.github.isyourbrainfoss.ProtonPassGtk.json
+      - name: Create bundle
+        run: |
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            flatpak-repo io.github.isyourbrainfoss.ProtonPassGtk-${{ matrix.arch }}.flatpak \
+            io.github.isyourbrainfoss.ProtonPassGtk stable
+          sha256sum io.github.isyourbrainfoss.ProtonPassGtk-${{ matrix.arch }}.flatpak \
+            > io.github.isyourbrainfoss.ProtonPassGtk-${{ matrix.arch }}.flatpak.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: proton-pass-gtk-${{ matrix.arch }}
-          path: proton-pass-gtk-${{ matrix.arch }}.flatpak
+          path: io.github.isyourbrainfoss.ProtonPassGtk-${{ matrix.arch }}.flatpak*
+
+  # On a v* tag: attach both bundles to the GitHub Release and tell isyourbrainfoss/flatpak,
+  # which imports, signs and serves them at https://isyourbrainfoss.github.io/flatpak/.
+  # No signing key lives in this repo.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, flatpak]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: proton-pass-gtk-*
+          merge-multiple: true
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sha256sum -c ./*.sha256
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" ./*.flatpak ./*.sha256 -R "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" ./*.flatpak ./*.sha256 -R "$GITHUB_REPOSITORY" \
+              --title "Proton Pass GTK $TAG" --generate-notes
+          fi
+      - name: Notify isyourbrainfoss/flatpak
+        env:
+          DISPATCH_TOKEN: ${{ secrets.FLATPAK_DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::notice::FLATPAK_DISPATCH_TOKEN not set; the shared repo picks this release up on its weekly or a manual run."
+            exit 0
+          fi
+          GH_TOKEN="$DISPATCH_TOKEN" gh api repos/isyourbrainfoss/flatpak/dispatches \
+            -f event_type=app-updated \
+            -F 'client_payload[app]=io.github.isyourbrainfoss.ProtonPassGtk' \
+            -F "client_payload[tag]=$TAG"
