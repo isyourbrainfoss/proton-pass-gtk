@@ -1,0 +1,31 @@
+[package]
+name = "proton-pass-gtk"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+description = "An unofficial adaptive GTK frontend for Proton Pass CLI"
+
+[features]
+default = ["ui"]
+ui = ["dep:gtk", "dep:adw", "dep:futures-util"]
+
+[dependencies]
+serde_json = "1"
+zeroize = "1"
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"], optional = true }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"], optional = true }
+futures-util = { version = "0.3", optional = true }
+
+[[bin]]
+name = "proton-pass-gtk"
+path = "src/main.rs"
+required-features = ["ui"]
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+strip = true
+debug = 0

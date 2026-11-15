@@ -1,0 +1,53 @@
+name: Rust and Flatpak
+on:
+  push:
+    branches: [main, feat/rust]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev xvfb
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Adaptive UI, clipboard ownership and 30-second expiry
+        run: PPG_BACKEND=mock PPG_SIZE=360x720 GTK_A11Y=none GDK_BACKEND=x11 GSK_RENDERER=cairo xvfb-run -a cargo test --locked --bin proton-pass-gtk -- --ignored --test-threads=1
+  flatpak:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive -y flathub org.gnome.Platform//51 org.gnome.Sdk//51 org.freedesktop.Sdk.Extension.rust-stable//26.08
+      - name: Build offline in the sandbox
+        run: flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build build-aux/flatpak/io.github.isyourbrainfoss.ProtonPassGtk.json
+      - name: Create local bundle (not published)
+        run: flatpak build-bundle flatpak-repo proton-pass-gtk-${{ matrix.arch }}.flatpak io.github.isyourbrainfoss.ProtonPassGtk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proton-pass-gtk-${{ matrix.arch }}
+          path: proton-pass-gtk-${{ matrix.arch }}.flatpak

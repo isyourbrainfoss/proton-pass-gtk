@@ -41,14 +41,17 @@
   <screenshots>
     <screenshot type="default">
       <caption>Vaults, items and details on the desktop</caption>
-      <image>https://raw.githubusercontent.com/isyourbrainfoss/proton-pass-gtk/main/screenshots/desktop-1280x800-list-light.png</image>
+      <image>https://raw.githubusercontent.com/isyourbrainfoss/proton-pass-gtk/main/screenshots/rust/desktop-1280x800-list-light.png</image>
     </screenshot>
     <screenshot>
       <caption>Item details on a phone</caption>
-      <image>https://raw.githubusercontent.com/isyourbrainfoss/proton-pass-gtk/main/screenshots/phone-360x720-detail-light.png</image>
+      <image>https://raw.githubusercontent.com/isyourbrainfoss/proton-pass-gtk/main/screenshots/rust/phone-360x720-detail-light.png</image>
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.2.0" date="2026-11-06">
+      <description><p>Rust rewrite with adaptive navigation and offline Flatpak builds.</p></description>
+    </release>
     <release version="0.1.0" date="2026-11-05">
       <description>
         <p>First scaffold: sign-in, vaults, search, item details and copy with clipboard auto-clear.</p>

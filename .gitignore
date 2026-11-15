@@ -1,20 +1,9 @@
-# Build output
+/target/
 /_build/
-/build/
-/builddir/
 /.flatpak-builder/
-/repo/
-*.flatpak
-
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-
-# Local tools (downloaded pass-cli binaries are not redistributed here)
+/flatpak-build/
+/flatpak-repo/
+/*.flatpak
 /tools/
-
-# Never commit session data or secrets
-.session/
-*.env
+__pycache__/
+.pytest_cache/

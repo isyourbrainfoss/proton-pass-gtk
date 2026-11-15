@@ -1,19 +1,28 @@
 {
-  "id": "io.github.isyourbrainfoss.ProtonPassGtk",
+  "app-id": "io.github.isyourbrainfoss.ProtonPassGtk",
   "runtime": "org.gnome.Platform",
   "runtime-version": "51",
   "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.rust-stable"
+  ],
   "command": "proton-pass-gtk",
   "finish-args": [
-    "--share=network",
-    "--share=ipc",
-    "--socket=fallback-x11",
     "--socket=wayland",
-    "--device=dri",
+    "--socket=fallback-x11",
+    "--share=ipc",
+    "--share=network",
     "--talk-name=org.freedesktop.secrets",
     "--env=PROTON_PASS_LINUX_KEYRING=dbus"
   ],
-  "cleanup": ["/include", "/lib/pkgconfig", "*.la", "*.a"],
+  "build-options": {
+    "append-path": "/usr/lib/sdk/rust-stable/bin",
+    "env": {
+      "CARGO_HOME": "/run/build/proton-pass-gtk/cargo",
+      "CARGO_NET_OFFLINE": "true",
+      "CARGO_BUILD_JOBS": "2"
+    }
+  },
   "modules": [
     {
       "name": "pass-cli",
@@ -24,17 +33,21 @@
       "sources": [
         {
           "type": "file",
-          "only-arches": ["x86_64"],
           "url": "https://proton.me/download/pass-cli/2.7.0/pass-cli-linux-x86_64",
           "sha256": "fd933e76179a5a33b295853e9c6696e49e584fe2141b1aafc63a3d78c0791cdb",
-          "dest-filename": "pass-cli"
+          "dest-filename": "pass-cli",
+          "only-arches": [
+            "x86_64"
+          ]
         },
         {
           "type": "file",
-          "only-arches": ["aarch64"],
           "url": "https://proton.me/download/pass-cli/2.7.0/pass-cli-linux-aarch64",
           "sha256": "93918d5621593cac88956854d0f52cbc43851dcd9c01840ffe48a88b3be84c6b",
-          "dest-filename": "pass-cli"
+          "dest-filename": "pass-cli",
+          "only-arches": [
+            "aarch64"
+          ]
         }
       ]
     },
@@ -44,8 +57,19 @@
       "sources": [
         {
           "type": "dir",
-          "path": "../.."
-        }
+          "path": "../..",
+          "skip": [
+            ".git",
+            "target",
+            "_build",
+            "tools",
+            ".flatpak-builder",
+            "flatpak-build",
+            "flatpak-repo",
+            "screenshots"
+          ]
+        },
+        "cargo-sources.json"
       ]
     }
   ]

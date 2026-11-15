@@ -1,166 +1,139 @@
-# Proton Pass GTK
+# Proton Pass GTK — Rust edition
 
-An adaptive GTK 4 / libadwaita front end for Proton's official command-line
-tool, [`pass-cli`](https://github.com/protonpass/pass-cli). It is built for
-mobile Linux (Phosh / BengalOS on the Fairphone 5, 360–408 px portrait) and
-for the desktop, and it follows the GNOME HIG.
+An **unofficial, read-only** adaptive GTK4/libadwaita frontend for Proton’s official
+[pass-cli](https://github.com/protonpass/pass-cli). Not affiliated with Proton AG.
+App ID: `io.github.isyourbrainfoss.ProtonPassGtk`. GPL-3.0-or-later.
 
-> Unofficial. Not affiliated with or endorsed by Proton AG. This app does not
-> implement Proton's auth or crypto. It drives `pass-cli`.
+This branch starts from `main`; the Python prototype in PR #1 / `feat/scaffold`
+is deliberately untouched. No Proton session or real credentials are included.
 
-| Phone (360×720) | | Desktop (1280×800) |
-|---|---|---|
-| ![](screenshots/phone-360x720-list-light.png) | ![](screenshots/phone-360x720-detail-dark.png) | ![](screenshots/desktop-1280x800-list-light.png) |
+## What is implemented
 
-The screenshots use the built-in **mock backend**. All data in them is fake.
+- Rust with gtk4-rs 0.10 / libadwaita-rs 0.8, Meson + Cargo. Minimum GTK 4.12 /
+  libadwaita 1.5; these conservative bindings also work on the GNOME 51 runtime.
+- `AdwApplication` and nested `AdwNavigationSplitView`s: three panes on desktop,
+  two below 860sp, one below 600sp. On phones: **Vaults → Items → Details**, with
+  native back navigation. Light/dark mode follows the system; menu override.
+- Browser sign-in with `pass-cli login`, safe Proton-URL recognition, cancellation,
+  sign-out confirmation, and serialized asynchronous `GioSubprocess` calls.
+- Vault selection, active-item list, current-vault search and type-to-search.
+- Login, card, identity, secure note, alias, SSH key, Wi-Fi, custom/section fields.
+  Unknown types retain their title/note; attachments are counted, not downloaded.
+- Copy username/password/one-time code with toasts; **30-second clipboard clear**
+  only if this app still owns the clipboard. Passwords hide again after 30 seconds.
+- Live 30-second TOTP countdown. A revealed code refreshes on period rollover and
+  hides after 30 seconds. Copy always fetches a fresh code. Nonstandard TOTP
+  periods are not yet decoded (the CLI code-only JSON has no period metadata).
+- Accessible button/search labels, wrapping details, keyboard navigation.
+- Explicit demo backend (`PPG_BACKEND=mock`) with a permanent **fake data** banner.
 
-## Status: scaffold (v0.1.0)
+### Keyboard shortcuts
 
-Working with the mock backend, and wired to pass-cli:
-
-- Sign-in page (AdwStatusPage). It runs `pass-cli login` (web login: SSO, 2FA
-  and security keys), opens the printed URL with `Gtk.UriLauncher`, and closes
-  when pass-cli finishes.
-- Vault list with an **All Items** entry and item counts.
-- Item list (`GtkListView`) with type icons and live search (Ctrl+F, or just
-  start typing).
-- Item details (AdwPreferencesPage with property rows):
-  - copy buttons for username, email, password, one-time code, URLs and notes;
-  - password reveal that hides itself again after 30 s;
-  - live TOTP with a countdown;
-  - custom fields and sections, card, Wi-Fi, SSH key and identity fields.
-- Clipboard auto-clear after 30 s (`PPG_CLIPBOARD_CLEAR_SECONDS`). It only
-  clears if the clipboard still holds what the app copied. Secrets also carry
-  `x-kde-passwordManagerHint: secret`, so clipboard managers can skip them.
-- Toasts, a sign-out confirmation (AdwAlertDialog), an About dialog and a
-  shortcuts window.
-- Adaptive layout: two nested `AdwNavigationSplitView`s. An `AdwBreakpoint`
-  collapses the vault sidebar at ≤ 860 sp and both panes at ≤ 600 sp.
-- Dark mode follows the system (AdwStyleManager default). You can force it
-  with `PPG_COLOR_SCHEME=dark|light`.
-- Accessibility: icon-only buttons have accessible labels and tooltips, list
-  rows have accessible labels, and masked values are announced as "Hidden".
-
-Not done yet: see [Next steps](#next-steps).
-
-## Running
-
-Requirements: Python ≥ 3.10, PyGObject, GTK ≥ 4.12, libadwaita ≥ 1.5 and
-`pass-cli` (≥ 2.5; tested with 2.7.0).
-
-```sh
-# Debian / BengalOS / Mobian
-run0 apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 meson
-# Arch
-run0 pacman -S python-gobject gtk4 libadwaita meson
-
-# demo data, no account needed
-PPG_BACKEND=mock PYTHONPATH=src python3 -m protonpassgtk
-
-# real pass-cli (on $PATH, ~/.local/bin, or PPG_PASS_CLI=/path/to/pass-cli)
-PYTHONPATH=src python3 -m protonpassgtk
-```
-
-Install with meson:
-
-```sh
-meson setup _build --prefix="$HOME/.local"
-meson test -C _build     # pytest + desktop-file and metainfo validation
-meson install -C _build
-```
-
-Flatpak (not published): `flatpak-builder --user --install _flatpak
-build-aux/flatpak/io.github.isyourbrainfoss.ProtonPassGtk.json`. The manifest
-bundles the official pass-cli 2.7.0 binary for x86_64 and aarch64 with
-SHA-256 pinning, and sets `PROTON_PASS_LINUX_KEYRING=dbus`, because
-Flatpak's seccomp filter blocks the kernel keyring.
-
-### On a Phosh phone
-
-pass-cli stores its session key in the **kernel keyring** by default, and
-that keyring is cleared on every reboot. To keep the session across reboots
-on Phosh, set this in the session environment (gnome-keyring is running):
-
-```sh
-export PROTON_PASS_LINUX_KEYRING=dbus
-```
-
-### aarch64 (Fairphone 5) testing without the phone
-
-The official `pass-cli-linux-aarch64` binary runs on an x86_64 box through
-qemu-user binfmt. You can also run the whole app inside an arm64 Debian
-trixie rootfs, made with `mmdebstrap --arch=arm64` and including
-`python3-gi gir1.2-adw-1 gir1.2-gtk-4.0 adwaita-icon-theme`. Point it at a
-host Xvfb with `GSK_RENDERER=cairo`; see
-`screenshots/arm64-qemu-phone-360x720-detail-dark.png`. Limits under
-qemu-user:
-
-- `keyctl` is not emulated (ENOSYS), so pass-cli's default kernel keyring
-  fails ("Error creating client features"). Set
-  `PROTON_PASS_KEY_PROVIDER=fs` for emulated tests only.
-- Packaging must pull in `librsvg2-common`, or some SVG icons do not render.
-- Touch, OSK (squeekboard), scale 3 and Wayland/Phoc need the real device or
-  a Phosh VM.
-
-## Environment variables
-
-| Variable | Meaning |
+| Shortcut | Action |
 |---|---|
-| `PPG_BACKEND=mock` | Fake demo backend (no account, no network) |
-| `PPG_MOCK_SIGNED_OUT=1` | Mock starts on the sign-in page |
-| `PPG_PASS_CLI=/path` | pass-cli binary to use |
-| `PPG_CLIPBOARD_CLEAR_SECONDS` | Clipboard auto-clear delay (default 30, 0 = off) |
-| `PPG_COLOR_SCHEME=dark\|light` | Force the colour scheme |
+| Ctrl+F / type text | Search current vault |
+| Ctrl+R | Refresh |
+| Ctrl+W / Ctrl+Q | Close / Quit |
+| Ctrl+? | Shortcuts |
+| Ctrl+Shift+U | Copy username (email fallback) |
+| Ctrl+Shift+C | Copy password |
+| Ctrl+Shift+T | Copy one-time code |
 
-## Security rules (for contributors)
+## Flatpak (intended installation method)
 
-- Never store, log, print or echo secrets. `parse_item_view` drops every
-  secret value (password, card number, hidden fields, TOTP URIs and so on).
-  The model only records that the field exists. Values are fetched one at a
-  time with `pass-cli item view --field …` or `item totp` when the user copies
-  or reveals them, and are not kept.
-- Never put secrets on a command line, and never pass `--show-secrets`.
-- Error messages are cut down to one stderr line. Parse errors never echo the
-  payload.
-- Tests use obviously fake values and assert that they do not leak into the
-  models.
+The manifest targets **GNOME 51** and the matching **rust-stable 26.08** SDK
+extension, the latest stable runtime checked on 2026-11-06. It vendors all Cargo
+sources for network-free compilation. It bundles the official **pass-cli 2.7.0**
+for x86_64/aarch64 with hashes from Proton’s versions manifest, not a host binary.
+Secret Service storage is enabled with `PROTON_PASS_LINUX_KEYRING=dbus`.
 
-## Layout
+See [build instructions and permissions](build-aux/flatpak/README.md).
+The GitHub Actions workflow tests Rust and builds local `.flatpak` artifacts on
+native x86_64 and aarch64 runners; it does **not** publish to Flathub or a registry.
 
+**Local packaging status:** `flatpak-builder` cannot initialize here because
+`org.gnome.Sdk/x86_64/51` is not installed. The SDK (~2.5 GB installed) plus Rust
+extension (~2.0 GB) exceed this box’s available space even before the runtime and
+build output. No local `.flatpak` bundle is claimed. Use the CI artifact or build
+on a machine with at least 8–10 GB free. Packaging remains unverified until that
+build succeeds.
+
+## Native development
+
+```sh
+# Debian 13; Rust stable, Meson and Ninja required
+sudo apt install libgtk-4-dev libadwaita-1-dev meson ninja-build pkg-config
+cargo build --locked
+PPG_BACKEND=mock cargo run --locked
+# Native real backend (requires official CLI + Secret Service):
+PPG_PASS_CLI="$PWD/tools/pass-cli" cargo run --locked
 ```
-src/protonpassgtk/
-  main.py          Adw.Application, accels, shortcuts window, about
-  window.py        split views, breakpoints, vault/item lists, search, copy
-  item_view.py     details page (rows, reveal, TOTP)
-  login.py         sign-in dialog around `pass-cli login`
-  clipboard.py     copy + auto-clear
-  parsing.py       pass-cli JSON → models (no GTK, unit tested)
-  backend/         base interface, pass-cli (Gio.Subprocess, async), mock
-data/              desktop file, metainfo, icons (placeholders)
-build-aux/         flatpak manifest, screenshot tooling, fetch-pass-cli.sh
-docs/PASS-CLI.md   what pass-cli supports and its JSON shapes
-tests/             pytest (parsing, argv)
+
+`build-aux/fetch-pass-cli.sh` fetches/verifies the official CLI for development.
+Never enter credentials in this app or put secrets in shell arguments. Sign-in
+is on Proton’s website. Accounts using a Pass extra password must currently run
+`pass-cli login` once in the matching environment first; extra-password UI and
+session-unlock UI are future work. CLI account eligibility depends on Proton;
+third-party paid-plan reports are not an official guarantee.
+
+GNOME-style Meson entry point (all Cargo dependencies must be fetched first):
+
+```sh
+cargo fetch --locked
+meson setup _build --prefix=/usr
+meson compile -C _build
+meson test -C _build --print-errorlogs
+# install via DESTDIR for testing, not into your host by default
+DESTDIR="$PWD/_build/stage" meson install -C _build
 ```
 
-Screenshots: `build-aux/screenshots.sh` renders every state with the mock
-backend under Xvfb into `screenshots/`.
+## Tests and screenshots
 
-## Next steps
+```sh
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+# Display-dependent regression test (also runs in CI):
+PPG_BACKEND=mock PPG_SIZE=360x720 GTK_A11Y=none GDK_BACKEND=x11 GSK_RENDERER=cairo xvfb-run -a cargo test --locked --bin proton-pass-gtk -- --ignored --test-threads=1
+# Parser/argument tests without GUI libraries:
+cargo test --locked --no-default-features
+# Rust-only ARM64 type check using host pkg-config metadata (NOT an ARM link):
+rustup target add aarch64-unknown-linux-gnu
+PKG_CONFIG_ALLOW_CROSS=1 cargo check --locked --target aarch64-unknown-linux-gnu
+# Deterministic GTK-rendered mock screenshots:
+cargo build --locked
+xvfb-run -a -s '-screen 0 1600x1000x24' dbus-run-session -- build-aux/screenshots.sh
+```
 
-1. Test against a real account (needs a Pass plan that is allowed to use the
-   CLI), and check the JSON shapes against `tests/fixtures`.
-2. Support the Pass extra password: ask in an AdwPasswordEntry and pass it to
-   the child process through `PROTON_PASS_EXTRA_PASSWORD_FILE` on a memfd or
-   pipe, never on argv.
-3. GSettings: clipboard timeout, window size, last vault.
-4. Search usernames and URLs. `item list` only exposes titles, so this needs
-   an opt-in, in-memory, non-secret index.
-5. Session lock (`pass-cli session lock/unlock`) and auto-lock on idle.
-6. Create and edit items, trash, password generator (`password generate`).
-7. Test on the Fairphone 5 (Phosh, touch, OSK, scale 3) and on Arch.
-8. Translations (gettext/po), a real app icon, and Flathub review.
+Fixtures and CLI notes are reused from `feat/scaffold`. Tests cover parsing,
+secret redaction, all item types, field arguments, URL allowlisting, a real async
+subprocess contract with an offline fake CLI, and the mock backend lifecycle. The separate GTK regression test verifies all
+three adaptive widths, search, copying, clipboard ownership preservation,
+30-second clipboard clear/password re-hide, and sign-out cleanup.
+Screenshots are in [`screenshots/rust/`](screenshots/rust/): 360×720 phone vaults,
+list, details, search, sign-in and copied toast; 1280×800 desktop list/sign-in;
+all in light and dark. They render real GTK widgets, not drawn mockups.
 
-## License
+## Security boundaries and unfinished validation
 
-GPL-3.0-or-later. See [LICENSE](LICENSE). pass-cli itself is also
-GPL-3.0-or-later (Proton AG).
+- No `--show-secrets`, export, shell evaluation, or secret values in command lines.
+- Hidden fields/TOTP seeds are omitted from retained detail models; values are
+  fetched **one field at a time** only for copy/reveal. CLI detail JSON itself can
+  contain secrets, so raw response strings and parsed JSON string values are
+  zeroized on normal drop. Nothing is persisted or logged by this frontend.
+- CLI stderr is silenced and errors use static messages rather than echoing data.
+  Non-login requests time out after 45 seconds. Login is explicitly cancellable.
+- Revealed/clipboard text necessarily lives transiently in GTK/GDK memory. This is
+  not a hardened secret-memory allocator; zeroization cannot undo copies in GTK,
+  the OS, swap or a clipboard manager. Clipboard managers may keep copies beyond
+  our 30-second clear. Do not use one for sensitive credentials.
+- The official CLI owns its session on disk and its key in Secret Service. This
+  frontend does not implement cryptography or store passwords itself.
+- Real account login, authenticated CLI JSON, portal/keyring behavior inside the
+  final Flatpak, and native aarch64 linking/running still require validation.
+  The ARM64 `cargo check` checks Rust code, not cross-library ABI/runtime behavior.
+- No edit/create/delete of vault items, extra-password entry, attachment download,
+  persisted settings, or idle/session auto-lock yet. This is a development build,
+  not a security-audited password manager replacement.
+
+[CLI commands, output formats and licensing](docs/PASS-CLI.md).
