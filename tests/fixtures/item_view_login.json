@@ -1,0 +1,36 @@
+{
+  "item": {
+    "id": "itm_01",
+    "share_id": "shr_1111",
+    "vault_id": "vlt_AAAA",
+    "content": {
+      "title": "Example Mail",
+      "note": "Demo note",
+      "item_uuid": "6f1c-demo",
+      "content": {
+        "Login": {
+          "email": "demo.user@example.com",
+          "username": "demo_user",
+          "password": "FAKE-test-password-123",
+          "urls": ["https://mail.example.com", ""],
+          "totp_uri": "otpauth://totp/Example:demo?secret=FAKEFAKEFAKEFAKE&issuer=Example",
+          "passkeys": [],
+          "autofill_urls": []
+        }
+      },
+      "extra_fields": [
+        {"name": "Recovery key", "content": {"Hidden": "FAKE-hidden-value"}},
+        {"name": "Account ID", "content": {"Text": "12345"}},
+        {"name": "Admin 2FA", "content": {"Totp": "otpauth://totp/x?secret=FAKEFAKE"}},
+        {"name": "Renewal", "content": {"Timestamp": 1790000000}}
+      ],
+      "platform_specific": null,
+      "custom_icon": null
+    },
+    "state": "Active",
+    "flags": [],
+    "create_time": "2026-01-15T12:00:00",
+    "modify_time": "2026-10-02T09:30:00"
+  },
+  "attachments": []
+}

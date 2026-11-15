@@ -1,0 +1,6 @@
+{
+  "vaults": [
+    {"name": "Personal", "vault_id": "vlt_AAAA", "share_id": "shr_1111"},
+    {"name": "Work", "vault_id": "vlt_BBBB", "share_id": "shr_2222"}
+  ]
+}
