@@ -51,6 +51,9 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.2.1" date="2026-11-16">
+      <description><p>Software centres now list the app as adaptive and usable on phones.</p></description>
+    </release>
     <release version="0.2.0" date="2026-11-06">
       <description><p>Rust rewrite with adaptive navigation and offline Flatpak builds.</p></description>
     </release>
@@ -60,4 +63,7 @@
       </description>
     </release>
   </releases>
+  <custom>
+    <value key="Purism::form_factor">mobile</value>
+  </custom>
 </component>
