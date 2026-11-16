@@ -1,4 +1,4 @@
-project('proton-pass-gtk', version: '0.2.0', meson_version: '>= 0.63.0', license: 'GPL-3.0-or-later')
+project('proton-pass-gtk', version: '0.2.1', meson_version: '>= 0.63.0', license: 'GPL-3.0-or-later')
 app_id = 'io.github.isyourbrainfoss.ProtonPassGtk'
 dependency('gtk4', version: '>= 4.12')
 dependency('libadwaita-1', version: '>= 1.5')
